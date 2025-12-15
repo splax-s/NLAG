@@ -1,0 +1,64 @@
+[package]
+name = "nlag-edge"
+description = "NLAG Edge - Public ingress proxy server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nlag-edge"
+path = "src/main.rs"
+
+[dependencies]
+nlag-common = { path = "../nlag-common" }
+
+# Async runtime
+tokio = { workspace = true }
+futures = { workspace = true }
+
+# QUIC transport
+quinn = { workspace = true }
+
+# TLS
+rustls = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# Configuration
+config = { workspace = true }
+serde = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+dashmap = { workspace = true }
+parking_lot = { workspace = true }
+bytes = { workspace = true }
+
+# Rate limiting
+governor = { workspace = true }
+
+# HTTP handling (for HTTP protocol support)
+hyper = { version = "1.4", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+
+# Metrics
+prometheus = "0.13"
+lazy_static = "1.5"
+
+# JWT authentication
+jsonwebtoken = "9"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

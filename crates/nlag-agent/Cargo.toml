@@ -1,0 +1,53 @@
+[package]
+name = "nlag-agent"
+description = "NLAG Agent - CLI client for exposing local services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "nlag"
+path = "src/main.rs"
+
+[dependencies]
+nlag-common = { path = "../nlag-common" }
+
+# Async runtime
+tokio = { workspace = true }
+futures = { workspace = true }
+
+# QUIC transport
+quinn = { workspace = true }
+
+# TLS
+rustls = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+# Configuration
+config = { workspace = true }
+dirs = { workspace = true }
+serde = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+parking_lot = { workspace = true }
+serde_json = "1.0"
+
+# TUI
+ratatui = "0.29"
+crossterm = "0.28"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

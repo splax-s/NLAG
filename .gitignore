@@ -1,0 +1,37 @@
+# Rust artifacts
+target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+logs/
+
+# Development certificates
+*.pem
+*.key
+*.crt
+*.p12
+
+# Build artifacts
+*.so
+*.dylib
+*.dll
+
+# Coverage
+*.profraw
+coverage/

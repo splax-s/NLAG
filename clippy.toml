@@ -1,0 +1,28 @@
+# Clippy configuration
+# Be strict but not pedantic
+
+[workspace]
+# Warn on common issues
+warn = [
+    "clippy::all",
+    "clippy::pedantic",
+]
+
+# Allow some pedantic lints that are too noisy
+allow = [
+    "clippy::module_name_repetitions",
+    "clippy::must_use_candidate",
+    "clippy::missing_errors_doc",
+    "clippy::missing_panics_doc",
+    "clippy::doc_markdown",
+    "clippy::similar_names",
+]
+
+# Deny dangerous patterns
+deny = [
+    "clippy::unwrap_used",
+    "clippy::expect_used",
+    "clippy::panic",
+    "clippy::todo",
+    "clippy::unimplemented",
+]
