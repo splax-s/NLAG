@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::str::FromStr;
 use uuid::Uuid;
 
 /// Unique identifier for an agent instance
@@ -78,6 +79,14 @@ impl Default for TunnelId {
 impl fmt::Display for TunnelId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl FromStr for TunnelId {
+    type Err = uuid::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(Uuid::parse_str(s)?))
     }
 }
 

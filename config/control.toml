@@ -1,0 +1,14 @@
+# NLAG Control Plane Configuration
+
+# Address for API and Dashboard
+listen_addr = "0.0.0.0:3000"
+
+# Database configuration
+database_path = "/var/lib/nlag/nlag.db"
+
+[auth]
+enabled = false
+
+[jwt]
+algorithm = "HS256"
+# secret = "change-me-in-production"

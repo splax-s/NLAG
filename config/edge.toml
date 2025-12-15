@@ -1,0 +1,43 @@
+# NLAG Edge Server Configuration
+# For production, customize these values
+
+# Address for agent QUIC connections
+agent_listen_addr = "0.0.0.0:4443"
+
+# Address for public HTTP/TCP traffic
+public_listen_addr = "0.0.0.0:8080"
+
+# Address for metrics HTTP endpoint
+metrics_listen_addr = "0.0.0.0:9090"
+
+# Address for inspection UI
+inspect_listen_addr = "0.0.0.0:4040"
+
+[tls]
+# These will be auto-generated in development mode
+cert_path = "/etc/nlag/certs/edge.crt"
+key_path = "/etc/nlag/certs/edge.key"
+
+[domain]
+base_domain = "localhost"
+scheme = "http"
+
+[rate_limit]
+requests_per_second = 1000
+burst_size = 100
+max_connections_per_tunnel = 100
+
+[auth]
+enabled = false
+
+[inspect]
+enabled = true
+max_body_size = 1048576
+max_requests_per_tunnel = 500
+
+[warning]
+enabled = true
+
+[load_balancer]
+strategy = "round_robin"
+health_check_interval_secs = 30

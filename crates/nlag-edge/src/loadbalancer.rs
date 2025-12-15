@@ -377,6 +377,15 @@ pub struct LoadBalancer {
     config: LoadBalancerConfig,
 }
 
+impl std::fmt::Debug for LoadBalancer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadBalancer")
+            .field("groups_count", &self.groups.len())
+            .field("strategy", &self.config.strategy)
+            .finish()
+    }
+}
+
 impl LoadBalancer {
     /// Create a new load balancer
     pub fn new(config: LoadBalancerConfig) -> Arc<Self> {

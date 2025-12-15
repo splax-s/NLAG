@@ -17,12 +17,15 @@ mod auth;
 mod cli;
 mod config;
 mod domains;
+mod inspect;
+mod inspect_ui;
 mod loadbalancer;
 mod logging;
 mod metrics;
 mod pool;
 mod registry;
 mod server;
+mod warning;
 
 use cli::Cli;
 

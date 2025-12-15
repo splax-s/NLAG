@@ -64,5 +64,13 @@ jsonwebtoken = "9"
 rand = { workspace = true }
 hex = "0.4"
 
+# Web UI for inspection
+axum = { version = "0.7", features = ["ws"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+getrandom = { version = "0.3", features = ["std"] }
+urlencoding = "2.1"
+serde_json = { workspace = true }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

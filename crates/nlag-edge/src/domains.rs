@@ -74,6 +74,15 @@ pub struct DomainManager {
     cache_ttl: Duration,
 }
 
+impl std::fmt::Debug for DomainManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DomainManager")
+            .field("domains_count", &self.domains.len())
+            .field("expected_cname_target", &self.expected_cname_target)
+            .finish()
+    }
+}
+
 impl DomainManager {
     /// Create a new domain manager
     pub fn new(expected_cname_target: String) -> Arc<Self> {

@@ -19,6 +19,8 @@ use tracing::{error, info, warn};
 
 use crate::auth::AgentAuthenticator;
 use crate::config::EdgeConfig;
+use crate::inspect::RequestInspector;
+use crate::inspect_ui::create_inspect_router;
 use crate::registry::Registry;
 
 /// Shutdown signal broadcaster
@@ -48,6 +50,9 @@ impl ShutdownSignal {
 pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
     // Create shared registry
     let registry = Registry::new();
+
+    // Create request inspector
+    let inspector = RequestInspector::new(config.inspect.enabled);
 
     // Create shutdown signal channel
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -89,6 +94,25 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
     info!("  Agent listener: {}", config.agent_listen_addr);
     info!("  Public listener: {}", config.public_listen_addr);
 
+    // Start inspection UI if configured
+    let inspect_handle = if let Some(inspect_addr) = config.inspect_listen_addr {
+        info!("  Inspect UI: http://{}", inspect_addr);
+        let inspect_router = create_inspect_router(inspector.clone());
+        let inspect_app = axum::Router::new()
+            .nest("/inspect", inspect_router)
+            .route("/health", axum::routing::get(health_check))
+            .route("/ready", axum::routing::get(readiness_check));
+        
+        Some(tokio::spawn(async move {
+            let listener = tokio::net::TcpListener::bind(inspect_addr).await.unwrap();
+            if let Err(e) = axum::serve(listener, inspect_app).await {
+                error!("Inspect UI error: {}", e);
+            }
+        }))
+    } else {
+        None
+    };
+
     // Run both listeners concurrently
     let agent_handle = tokio::spawn(async move {
         if let Err(e) = agent_listener.run().await {
@@ -121,6 +145,9 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
         _ = async {
             let _ = agent_handle.await;
             let _ = public_handle.await;
+            if let Some(handle) = inspect_handle {
+                let _ = handle.await;
+            }
         } => {
             info!("All connections drained successfully");
         }
@@ -129,6 +156,23 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
     info!("Shutdown complete");
     Ok(())
 }
+
+/// Health check endpoint - returns 200 if server is running
+async fn health_check() -> axum::response::Response {
+    axum::response::Json(serde_json::json!({
+        "status": "healthy",
+        "version": env!("CARGO_PKG_VERSION"),
+    })).into_response()
+}
+
+/// Readiness check endpoint - returns 200 if server is ready to accept traffic
+async fn readiness_check() -> axum::response::Response {
+    axum::response::Json(serde_json::json!({
+        "status": "ready",
+    })).into_response()
+}
+
+use axum::response::IntoResponse;
 
 /// Wait for shutdown signal (Ctrl+C or SIGTERM)
 async fn wait_for_shutdown() {

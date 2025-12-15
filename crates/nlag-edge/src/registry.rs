@@ -14,6 +14,9 @@ use nlag_common::{
     types::{AgentId, TunnelConfig, TunnelId, TunnelState, TunnelStatus},
 };
 
+use crate::domains::DomainManager;
+use crate::loadbalancer::{Backend, LoadBalancer, LoadBalancerConfig};
+
 /// Registry of all connected agents and tunnels
 #[derive(Debug)]
 pub struct Registry {
@@ -23,8 +26,14 @@ pub struct Registry {
     /// Tunnels by ID
     tunnels: DashMap<TunnelId, TunnelEntry>,
 
-    /// Subdomain -> TunnelId mapping for routing
-    subdomain_map: DashMap<String, TunnelId>,
+    /// Subdomain -> Vec<TunnelId> mapping for routing (supports multiple tunnels per subdomain)
+    subdomain_map: DashMap<String, Vec<TunnelId>>,
+
+    /// Load balancer for distributing traffic
+    load_balancer: Arc<LoadBalancer>,
+
+    /// Custom domain manager
+    domain_manager: Arc<DomainManager>,
 
     /// Statistics
     stats: RegistryStats,
@@ -86,12 +95,42 @@ pub struct TunnelEntry {
 impl Registry {
     /// Create a new registry
     pub fn new() -> Arc<Self> {
+        let load_balancer = LoadBalancer::new(LoadBalancerConfig::default());
+        let domain_manager = DomainManager::new("edge.nlag.io".to_string());
+
         Arc::new(Self {
             agents: DashMap::new(),
             tunnels: DashMap::new(),
             subdomain_map: DashMap::new(),
+            load_balancer,
+            domain_manager,
             stats: RegistryStats::default(),
         })
+    }
+
+    /// Create a registry with custom configuration
+    pub fn with_config(lb_config: LoadBalancerConfig, cname_target: String) -> Arc<Self> {
+        let load_balancer = LoadBalancer::new(lb_config);
+        let domain_manager = DomainManager::new(cname_target);
+
+        Arc::new(Self {
+            agents: DashMap::new(),
+            tunnels: DashMap::new(),
+            subdomain_map: DashMap::new(),
+            load_balancer,
+            domain_manager,
+            stats: RegistryStats::default(),
+        })
+    }
+
+    /// Get the load balancer
+    pub fn load_balancer(&self) -> &Arc<LoadBalancer> {
+        &self.load_balancer
+    }
+
+    /// Get the domain manager
+    pub fn domain_manager(&self) -> &Arc<DomainManager> {
+        &self.domain_manager
     }
 
     /// Register a new agent
@@ -152,11 +191,6 @@ impl Registry {
         subdomain: String,
         public_url: String,
     ) -> Result<TunnelId, RegistryError> {
-        // Check if subdomain is already taken
-        if self.subdomain_map.contains_key(&subdomain) {
-            return Err(RegistryError::SubdomainTaken(subdomain));
-        }
-
         let tunnel_id = config.tunnel_id;
 
         // Check if agent exists
@@ -183,7 +217,17 @@ impl Registry {
 
         // Register tunnel
         self.tunnels.insert(tunnel_id, entry);
-        self.subdomain_map.insert(subdomain.clone(), tunnel_id);
+        
+        // Add to subdomain map (supports multiple tunnels per subdomain)
+        self.subdomain_map
+            .entry(subdomain.clone())
+            .or_insert_with(Vec::new)
+            .push(tunnel_id);
+
+        // Add to load balancer
+        let backend = Backend::new(agent_id, tunnel_id);
+        self.load_balancer.add_backend(&subdomain, backend);
+
         self.stats.total_tunnels.fetch_add(1, Ordering::Relaxed);
 
         tracing::info!("Tunnel {} registered for agent {} (subdomain: {})", tunnel_id, agent_id, subdomain);
@@ -193,7 +237,18 @@ impl Registry {
     /// Remove a tunnel
     pub fn remove_tunnel(&self, tunnel_id: &TunnelId) {
         if let Some((_, tunnel)) = self.tunnels.remove(tunnel_id) {
-            self.subdomain_map.remove(&tunnel.subdomain);
+            // Remove from subdomain map
+            if let Some(mut tunnels) = self.subdomain_map.get_mut(&tunnel.subdomain) {
+                tunnels.retain(|id| id != tunnel_id);
+                if tunnels.is_empty() {
+                    drop(tunnels);
+                    self.subdomain_map.remove(&tunnel.subdomain);
+                }
+            }
+
+            // Remove from load balancer
+            self.load_balancer.remove_backend(&tunnel.subdomain, &tunnel.agent_id);
+
             self.stats.total_tunnels.fetch_sub(1, Ordering::Relaxed);
             tracing::info!("Tunnel {} removed", tunnel_id);
         }
@@ -205,9 +260,45 @@ impl Registry {
         self.tunnels.get(tunnel_id)
     }
 
-    /// Look up tunnel by subdomain
+    /// Look up tunnel by subdomain (uses load balancer for selection)
     pub fn get_tunnel_by_subdomain(&self, subdomain: &str) -> Option<TunnelId> {
-        self.subdomain_map.get(subdomain).map(|r| *r.value())
+        // First check custom domains
+        if let Some(tunnel_id) = self.domain_manager.lookup_tunnel(subdomain) {
+            return Some(tunnel_id);
+        }
+
+        // Use load balancer to select a backend
+        if let Some(backend) = self.load_balancer.select(subdomain, None) {
+            return Some(backend.tunnel_id);
+        }
+
+        // Fallback to first tunnel in subdomain map
+        self.subdomain_map
+            .get(subdomain)
+            .and_then(|tunnels| tunnels.first().copied())
+    }
+
+    /// Look up tunnel by subdomain with client IP for sticky sessions
+    pub fn get_tunnel_by_subdomain_with_ip(&self, subdomain: &str, client_ip: &str) -> Option<TunnelId> {
+        // First check custom domains
+        if let Some(tunnel_id) = self.domain_manager.lookup_tunnel(subdomain) {
+            return Some(tunnel_id);
+        }
+
+        // Use load balancer with client IP for sticky sessions
+        if let Some(backend) = self.load_balancer.select(subdomain, Some(client_ip)) {
+            return Some(backend.tunnel_id);
+        }
+
+        // Fallback to first tunnel
+        self.subdomain_map
+            .get(subdomain)
+            .and_then(|tunnels| tunnels.first().copied())
+    }
+
+    /// Check if a subdomain exists
+    pub fn subdomain_exists(&self, subdomain: &str) -> bool {
+        self.subdomain_map.contains_key(subdomain) || self.domain_manager.lookup_tunnel(subdomain).is_some()
     }
 
     /// Get connection for a tunnel
@@ -252,10 +343,15 @@ impl Registry {
 
 impl Default for Registry {
     fn default() -> Self {
+        let load_balancer = LoadBalancer::new(LoadBalancerConfig::default());
+        let domain_manager = DomainManager::new("edge.nlag.io".to_string());
+
         Self {
             agents: DashMap::new(),
             tunnels: DashMap::new(),
             subdomain_map: DashMap::new(),
+            load_balancer,
+            domain_manager,
             stats: RegistryStats::default(),
         }
     }

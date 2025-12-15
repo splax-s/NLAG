@@ -1,10 +1,40 @@
 # NLAG - Next-Generation Low-Latency Access Gateway
 
 A production-grade secure tunneling platform built in Rust, providing:
-- Zero-trust security with mTLS
+- Zero-trust security with mTLS & JWT authentication
 - Low-latency QUIC transport
 - High concurrency through stream multiplexing
-- Enterprise-ready architecture
+- Enterprise-ready features: Rate limiting, Load balancing, Custom domains
+- Real-time request inspection (ngrok-style)
+- Modern dashboard UI
+
+## Features
+
+### ✅ Core Features
+- **QUIC Transport**: Ultra-low latency multiplexed connections
+- **HTTP/HTTPS Tunneling**: Full HTTP/1.1 and HTTP/2 support
+- **WebSocket Tunneling**: Seamless WebSocket pass-through
+- **TCP Tunneling**: Raw TCP port forwarding
+- **TLS Termination**: Automatic TLS with Let's Encrypt (planned) or custom certs
+
+### ✅ Enterprise Features
+- **JWT Authentication**: Secure agent authentication with RS256/HS256
+- **Rate Limiting**: Per-tunnel request rate limiting with token bucket
+- **Load Balancing**: Multiple strategies (Round Robin, Least Connections, IP Hash, etc.)
+- **Connection Pooling**: Efficient connection reuse
+- **Custom Domains**: CNAME/TXT verification for custom domain mapping
+- **Graceful Shutdown**: Proper connection draining
+
+### ✅ Observability
+- **Prometheus Metrics**: Full metrics export for monitoring
+- **Request Inspection**: Live HTTP request/response viewer (ngrok-style)
+- **Structured Logging**: JSON logs for aggregation
+
+### ✅ Developer Experience
+- **Terminal UI**: Beautiful TUI showing tunnel status and requests
+- **Dashboard**: Web-based management interface
+- **Docker Support**: Full Docker and docker-compose setup
+- **Warning Page**: Security interstitial for first-time browser visits
 
 ## Architecture
 
@@ -61,7 +91,26 @@ cargo run -p nlag-edge
 
 # Production mode (with config file)
 cargo run -p nlag-edge -- --config /etc/nlag/edge.toml
+
+# Generate sample configuration
+cargo run -p nlag-edge -- generate-config
 ```
+
+### Running the Control Plane
+
+```bash
+# Start the dashboard and API server
+cargo run -p nlag-control
+
+# Access the dashboard at http://localhost:3000
+```
+
+### Request Inspection
+
+When the edge server is running, access the inspect UI at:
+- `http://localhost:4040/inspect/ui` - Main inspector interface
+- `http://localhost:4040/inspect/ui/{tunnel_id}` - Tunnel-specific view
+- `http://localhost:4040/health` - Health check endpoint
 
 ### Exposing a Local Service
 
@@ -146,6 +195,8 @@ The edge server reads configuration from `/etc/nlag/edge.toml`:
 ```toml
 agent_listen_addr = "0.0.0.0:4443"
 public_listen_addr = "0.0.0.0:8080"
+metrics_listen_addr = "0.0.0.0:9090"
+inspect_listen_addr = "0.0.0.0:4040"
 
 [tls]
 cert_path = "/etc/nlag/certs/edge.crt"
@@ -159,6 +210,53 @@ scheme = "https"
 requests_per_second = 1000
 burst_size = 100
 max_connections_per_tunnel = 100
+
+[auth]
+enabled = true
+algorithm = "RS256"
+jwt_public_key = "/etc/nlag/jwt-public.pem"
+
+[inspect]
+enabled = true
+max_body_size = 1048576  # 1MB
+max_requests_per_tunnel = 500
+
+[warning]
+enabled = true
+title = "Security Warning"
+message = "You are about to access a tunnel..."
+bypass_hosts = ["internal.example.com"]
+
+[load_balancer]
+strategy = "round_robin"  # round_robin, least_connections, random, ip_hash
+health_check_interval_secs = 30
+```
+
+## Docker Deployment
+
+### Using Docker Compose
+
+```bash
+# Start the full stack (edge, control, prometheus, grafana)
+docker-compose up -d
+
+# View logs
+docker-compose logs -f edge
+
+# Stop
+docker-compose down
+```
+
+### Building Individual Images
+
+```bash
+# Build all images
+docker build -t nlag-edge --target edge .
+docker build -t nlag-control --target control .
+docker build -t nlag-agent --target agent .
+
+# Run edge server
+docker run -d -p 4443:4443/udp -p 8080:8080 -p 4040:4040 nlag-edge
 ```
 
 ## Wire Protocol
@@ -204,20 +302,16 @@ NLAG uses a binary framed protocol over QUIC streams:
 - Connection limits
 - Strict certificate validation
 
-## TODO: Enterprise Features
+## TODO: Future Features
 
-- [ ] mTLS client authentication
-- [ ] JWT/OAuth2 integration
-- [ ] IP allowlisting
-- [ ] Custom domains with automatic TLS
-- [ ] WebSocket protocol support
+- [ ] Let's Encrypt automatic TLS provisioning
 - [ ] gRPC tunneling
 - [ ] UDP support
 - [ ] Multi-region edge deployment
-- [ ] Metrics and observability
-- [ ] Admin dashboard
-- [ ] Audit logging
+- [ ] Audit logging with log shipping
 - [ ] Replay protection
+- [ ] API key management UI
+- [ ] Billing integration
 
 ## Development
 

@@ -1,0 +1,94 @@
+# NLAG Development Stack
+# Run with: docker-compose up -d
+
+version: '3.8'
+
+services:
+  # Edge Server - Public traffic ingress
+  edge:
+    build:
+      context: .
+      target: edge
+    ports:
+      - "4443:4443/udp"  # Agent QUIC connections
+      - "8080:8080"      # Public HTTP traffic
+      - "9090:9090"      # Prometheus metrics
+      - "4040:4040"      # Inspect UI
+    volumes:
+      - ./config/edge.toml:/etc/nlag/edge.toml:ro
+      - edge-certs:/etc/nlag/certs
+    environment:
+      - RUST_LOG=nlag=debug,nlag_common=debug
+    networks:
+      - nlag
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4040/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # Control Plane - Management API & Dashboard
+  control:
+    build:
+      context: .
+      target: control
+    ports:
+      - "3000:3000"      # Dashboard & API
+    volumes:
+      - ./config/control.toml:/etc/nlag/control.toml:ro
+      - control-data:/var/lib/nlag
+    environment:
+      - RUST_LOG=nlag=debug,nlag_common=debug
+    networks:
+      - nlag
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  # Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.enable-lifecycle'
+    networks:
+      - nlag
+    restart: unless-stopped
+
+  # Grafana for dashboards (optional)
+  grafana:
+    image: grafana/grafana:10.3.3
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      - nlag
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+networks:
+  nlag:
+    driver: bridge
+
+volumes:
+  edge-certs:
+  control-data:
+  prometheus-data:
+  grafana-data:
