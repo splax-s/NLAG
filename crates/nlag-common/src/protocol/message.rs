@@ -366,6 +366,8 @@ pub enum ErrorCode {
     Unavailable = 7,
     /// Resource exhausted
     ResourceExhausted = 8,
+    /// Permission denied
+    PermissionDenied = 9,
 }
 
 /// Shutdown notification

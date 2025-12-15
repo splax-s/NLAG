@@ -60,5 +60,9 @@ lazy_static = "1.5"
 # JWT authentication
 jsonwebtoken = "9"
 
+# Custom domains
+rand = { workspace = true }
+hex = "0.4"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

@@ -153,6 +153,58 @@ impl EdgeConfig {
         Self::development_config()
     }
 
+    /// Generate a sample configuration file
+    pub fn generate_sample_config() -> String {
+        r#"# NLAG Edge Server Configuration
+
+# Address for agent QUIC connections
+agent_listen_addr = "0.0.0.0:4443"
+
+# Address for public HTTP/TCP traffic
+public_listen_addr = "0.0.0.0:8080"
+
+# Address for metrics HTTP endpoint
+metrics_listen_addr = "0.0.0.0:9090"
+
+[tls]
+# Path to TLS certificate (PEM format)
+cert_path = "/etc/nlag/edge.crt"
+
+# Path to TLS private key (PEM format)
+key_path = "/etc/nlag/edge.key"
+
+[domain]
+# Base domain for tunnel subdomains
+base_domain = "tunnels.example.com"
+
+# URL scheme (http or https)
+scheme = "https"
+
+[rate_limit]
+# Maximum requests per second per tunnel
+requests_per_second = 1000
+
+# Burst capacity for rate limiting
+burst_size = 100
+
+# Maximum concurrent connections per tunnel
+max_connections_per_tunnel = 100
+
+[auth]
+# Enable authentication (disable for development)
+enabled = false
+
+# JWT algorithm: HS256 or RS256
+# algorithm = "HS256"
+
+# JWT secret for HS256 (base64 encoded)
+# jwt_secret = "base64-encoded-secret"
+
+# JWT public key path for RS256
+# jwt_public_key = "/etc/nlag/jwt-public.pem"
+"#.to_string()
+    }
+
     /// Create a development configuration with self-signed certs
     pub fn development_config() -> anyhow::Result<Self> {
         use nlag_common::crypto::cert::generate_self_signed_cert;

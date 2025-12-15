@@ -22,6 +22,7 @@ use tracing_subscriber::EnvFilter;
 
 mod api;
 mod auth;
+mod dashboard;
 mod store;
 
 /// NLAG Control Plane
@@ -77,7 +78,9 @@ async fn main() -> anyhow::Result<()> {
         store,
     });
 
-    let router = api::create_router(api_state);
+    // Combine API and Dashboard routers
+    let router = api::create_router(api_state.clone())
+        .merge(dashboard::create_dashboard_router(api_state));
 
     let addr: std::net::SocketAddr = format!("0.0.0.0:{}", cli.port).parse()?;
     tracing::info!("API server listening on {}", addr);

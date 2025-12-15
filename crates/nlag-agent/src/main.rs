@@ -126,13 +126,29 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             tunnel::run_multi_tunnel(config, tunnel_configs).await
         }
 
-        Commands::Config { show } => {
-            if show {
-                let config = config::AgentConfig::load()?;
-                println!("{}", serde_json::to_string_pretty(&config)?);
-            } else {
-                let path = config::AgentConfig::config_path()?;
-                println!("Configuration file: {}", path.display());
+        Commands::Config { action } => {
+            use cli::ConfigAction;
+            
+            match action {
+                ConfigAction::Show => {
+                    let config = config::AgentConfig::load()?;
+                    println!("{}", serde_json::to_string_pretty(&config)?);
+                }
+                ConfigAction::Init { force } => {
+                    let path = config::AgentConfig::config_path()?;
+                    if path.exists() && !force {
+                        anyhow::bail!(
+                            "Configuration file already exists at {}. Use --force to overwrite.",
+                            path.display()
+                        );
+                    }
+                    let created_path = config::AgentConfig::create_default_config()?;
+                    println!("Created configuration file at: {}", created_path.display());
+                }
+                ConfigAction::Path => {
+                    let path = config::AgentConfig::config_path()?;
+                    println!("{}", path.display());
+                }
             }
             Ok(())
         }

@@ -16,8 +16,11 @@ use tracing_subscriber::EnvFilter;
 mod auth;
 mod cli;
 mod config;
+mod domains;
+mod loadbalancer;
 mod logging;
 mod metrics;
+mod pool;
 mod registry;
 mod server;
 
@@ -57,6 +60,19 @@ async fn main() -> ExitCode {
 }
 
 async fn run(cli: Cli) -> anyhow::Result<()> {
+    use cli::Commands;
+    
+    // Handle subcommands
+    match cli.command {
+        Some(Commands::GenerateConfig) => {
+            println!("{}", config::EdgeConfig::generate_sample_config());
+            return Ok(());
+        }
+        Some(Commands::Run) | None => {
+            // Continue with normal server startup
+        }
+    }
+    
     let config = config::EdgeConfig::load(&cli.config)?;
 
     tracing::info!(

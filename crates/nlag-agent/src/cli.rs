@@ -75,13 +75,28 @@ pub enum Commands {
     /// Manage agent configuration
     #[command(alias = "cfg")]
     Config {
-        /// Show current configuration
-        #[arg(short, long)]
-        show: bool,
+        #[command(subcommand)]
+        action: ConfigAction,
     },
 
     /// Show version information
     Version,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigAction {
+    /// Show current configuration
+    Show,
+    
+    /// Initialize a new configuration file
+    Init {
+        /// Force overwrite existing config
+        #[arg(short, long)]
+        force: bool,
+    },
+    
+    /// Show the configuration file path
+    Path,
 }
 
 /// Parsed service specification for multi-expose

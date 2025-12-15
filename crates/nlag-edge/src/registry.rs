@@ -139,6 +139,11 @@ impl Registry {
         self.agents.get(agent_id)
     }
 
+    /// Get the number of tunnels for an agent
+    pub fn agent_tunnel_count(&self, agent_id: AgentId) -> usize {
+        self.agents.get(&agent_id).map(|a| a.tunnels.len()).unwrap_or(0)
+    }
+
     /// Register a new tunnel
     pub fn register_tunnel(
         &self,

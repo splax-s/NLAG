@@ -108,6 +108,7 @@ async fn handle_agent_connection(
     connection: QuicConnection,
     registry: Arc<Registry>,
     domain_config: DomainConfig,
+    authenticator: Arc<AgentAuthenticator>,
 ) -> anyhow::Result<()> {
     let remote_addr = connection.remote_address();
     info!("New agent connection from {}", remote_addr);
@@ -119,15 +120,29 @@ async fn handle_agent_connection(
     // Read authentication message
     let msg = read_message(&mut recv).await?;
 
-    let (agent_id, _session_id) = match msg {
+    let (agent_id, _session_id, claims) = match msg {
         Message::Auth(auth) => {
             info!(
                 "Agent {} authenticating (version: {})",
                 auth.agent_id, auth.client_version
             );
 
-            // TODO: Validate auth token against control plane
-            // For now, accept all connections in development mode
+            // Validate auth token
+            let claims = match authenticator.validate_token(&auth.auth_token) {
+                Ok(c) => c,
+                Err(e) => {
+                    let error_msg = Message::AuthResponse(AuthResponseMessage {
+                        success: false,
+                        error: Some(format!("Authentication failed: {}", e)),
+                        session_id: None,
+                        capabilities: vec![],
+                        server_version: env!("CARGO_PKG_VERSION").to_string(),
+                    });
+                    write_message(&mut send, &error_msg).await?;
+                    return Err(anyhow::anyhow!("Authentication failed: {}", e));
+                }
+            };
+
             let session_id = Uuid::new_v4().to_string();
 
             // Register the agent
@@ -153,8 +168,8 @@ async fn handle_agent_connection(
             });
             write_message(&mut send, &response).await?;
 
-            info!("Agent {} authenticated (session: {})", auth.agent_id, session_id);
-            (auth.agent_id, session_id)
+            info!("Agent {} authenticated (session: {}, subject: {})", auth.agent_id, session_id, claims.sub);
+            (auth.agent_id, session_id, claims)
         }
         other => {
             let error_msg = Message::Error(ErrorMessage {
@@ -175,6 +190,8 @@ async fn handle_agent_connection(
         agent_id,
         registry.clone(),
         &domain_config,
+        &authenticator,
+        &claims,
     )
     .await;
 
@@ -193,6 +210,8 @@ async fn message_loop(
     agent_id: AgentId,
     registry: Arc<Registry>,
     domain_config: &DomainConfig,
+    authenticator: &AgentAuthenticator,
+    claims: &crate::auth::AgentClaims,
 ) -> anyhow::Result<()> {
     loop {
         let msg = match read_message(recv).await {
@@ -205,7 +224,7 @@ async fn message_loop(
 
         match msg {
             Message::OpenTunnel(open) => {
-                handle_open_tunnel(send, agent_id, open, registry.clone(), domain_config).await?;
+                handle_open_tunnel(send, agent_id, open, registry.clone(), domain_config, authenticator, claims).await?;
             }
 
             Message::CloseTunnel(close) => {
@@ -248,6 +267,8 @@ async fn handle_open_tunnel(
     open: OpenTunnelMessage,
     registry: Arc<Registry>,
     domain_config: &DomainConfig,
+    authenticator: &AgentAuthenticator,
+    claims: &crate::auth::AgentClaims,
 ) -> anyhow::Result<()> {
     let tunnel_config = open.config;
 
@@ -256,6 +277,35 @@ async fn handle_open_tunnel(
         .subdomain
         .clone()
         .unwrap_or_else(|| registry.generate_subdomain());
+
+    // Check subdomain authorization
+    if !authenticator.check_subdomain(claims, &subdomain) {
+        let error_msg = Message::Error(ErrorMessage {
+            code: ErrorCode::PermissionDenied,
+            message: format!("Not authorized to use subdomain: {}", subdomain),
+            context: Some(format!("subdomain:{}", subdomain)),
+            fatal: false,
+        });
+        write_message(send, &error_msg).await?;
+        warn!("Agent {} unauthorized for subdomain {}", agent_id, subdomain);
+        return Ok(());
+    }
+
+    // Check max tunnels limit
+    if let Some(max) = claims.max_tunnels {
+        let current_count = registry.agent_tunnel_count(agent_id);
+        if current_count >= max as usize {
+            let error_msg = Message::Error(ErrorMessage {
+                code: ErrorCode::ResourceExhausted,
+                message: format!("Maximum tunnel limit reached ({}/{})", current_count, max),
+                context: Some("max_tunnels".to_string()),
+                fatal: false,
+            });
+            write_message(send, &error_msg).await?;
+            warn!("Agent {} reached max tunnels limit", agent_id);
+            return Ok(());
+        }
+    }
 
     // Build public URL
     let public_url = format!(

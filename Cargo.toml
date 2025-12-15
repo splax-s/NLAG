@@ -59,6 +59,7 @@ parking_lot = "0.12"
 pin-project-lite = "0.2"
 futures = "0.3"
 tokio-util = { version = "0.7", features = ["codec"] }
+rand = "0.8"
 
 # Rate limiting
 governor = "0.6"
