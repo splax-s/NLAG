@@ -13,18 +13,24 @@ use clap::Parser;
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
+mod acme;
+mod audit;
 mod auth;
 mod cli;
 mod config;
 mod domains;
+mod grpc;
 mod inspect;
 mod inspect_ui;
 mod loadbalancer;
 mod logging;
 mod metrics;
 mod pool;
+mod region;
 mod registry;
+mod replay;
 mod server;
+mod udp;
 mod warning;
 
 use cli::Cli;

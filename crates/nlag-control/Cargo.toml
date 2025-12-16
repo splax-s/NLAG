@@ -22,6 +22,7 @@ tracing-subscriber = { workspace = true }
 
 # Error handling
 anyhow = { workspace = true }
+thiserror = "1"
 
 # CLI
 clap = { workspace = true }
@@ -44,6 +45,13 @@ jsonwebtoken = "9"
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }
+dashmap = "5.5"
+rand = "0.8"
+hex = "0.4"
+sha2 = "0.10"
+
+# Password hashing
+bcrypt = "0.15"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

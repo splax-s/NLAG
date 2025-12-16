@@ -4,6 +4,9 @@
 //! - QUIC listener for agent connections
 //! - HTTP/TCP listener for public traffic
 //! - Traffic routing between them
+//! - Audit logging and replay protection
+//! - ACME certificate management
+//! - Multi-region support
 
 pub mod agent;
 pub mod public;
@@ -17,11 +20,15 @@ use tokio::signal;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 
+use crate::acme::CertificateManager;
+use crate::audit::{AuditLogger, AuditEventType};
 use crate::auth::AgentAuthenticator;
 use crate::config::EdgeConfig;
 use crate::inspect::RequestInspector;
 use crate::inspect_ui::create_inspect_router;
+use crate::region::{RegionRegistry, RegionId};
 use crate::registry::Registry;
+use crate::replay::ReplayGuard;
 
 /// Shutdown signal broadcaster
 #[derive(Clone)]
@@ -66,6 +73,51 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
         warn!("Agent authentication DISABLED - development mode");
     }
 
+    // Initialize audit logger
+    let edge_id = config.edge_id.clone().unwrap_or_else(|| {
+        uuid::Uuid::new_v4().to_string()
+    });
+    let audit_logger = AuditLogger::new(
+        config.audit.clone(),
+        edge_id.clone(),
+        config.region.as_ref().map(|r| r.region_id.clone()),
+    );
+    info!("Audit logging initialized");
+
+    // Initialize replay protection guard
+    let replay_guard = ReplayGuard::new(config.replay.clone());
+    if replay_guard.is_enabled() {
+        info!("Replay protection enabled");
+        replay_guard.clone().start_cleanup_task();
+    }
+
+    // Initialize region registry for multi-region support
+    let region_id = config.region.as_ref()
+        .map(|r| RegionId::new(&r.region_id))
+        .unwrap_or_else(|| RegionId::new("default"));
+    let region_registry = RegionRegistry::new(region_id);
+    info!("Region registry initialized");
+
+    // Initialize ACME certificate manager if enabled
+    let cert_manager = if config.acme.enabled {
+        let manager = CertificateManager::new(config.acme.clone());
+        if let Err(e) = manager.load_certificates().await {
+            warn!("Failed to load existing certificates: {}", e);
+        }
+        manager.clone().start_renewal_task();
+        info!("ACME certificate manager enabled");
+        Some(manager)
+    } else {
+        None
+    };
+
+    // Log server startup audit event
+    audit_logger.log(
+        audit_logger.event(AuditEventType::ServerStarted)
+            .with_metadata("version", env!("CARGO_PKG_VERSION"))
+            .with_metadata("edge_id", edge_id.clone())
+    ).await;
+
     // Load TLS certificates
     let cert_pem = std::fs::read_to_string(&config.tls.cert_path)?;
     let key_pem = std::fs::read_to_string(&config.tls.key_path)?;
@@ -91,8 +143,23 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
     )?;
 
     info!("NLAG Edge server started");
+    info!("  Edge ID: {}", edge_id);
     info!("  Agent listener: {}", config.agent_listen_addr);
     info!("  Public listener: {}", config.public_listen_addr);
+    
+    // Log optional features
+    if cert_manager.is_some() {
+        info!("  ACME: enabled");
+    }
+    if replay_guard.is_enabled() {
+        info!("  Replay protection: enabled");
+    }
+
+    // Store references for future use (e.g., hot-reload, health checks)
+    let _region_registry = region_registry;
+    let _replay_guard = replay_guard;
+    let _cert_manager = cert_manager;
+    let _inspector = inspector.clone();
 
     // Start inspection UI if configured
     let inspect_handle = if let Some(inspect_addr) = config.inspect_listen_addr {
@@ -128,6 +195,12 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
 
     // Wait for shutdown signal
     wait_for_shutdown().await;
+
+    // Log shutdown event
+    audit_logger.log(
+        audit_logger.event(AuditEventType::ServerStopped)
+            .with_metadata("reason", "graceful_shutdown")
+    ).await;
 
     info!("Initiating graceful shutdown...");
     

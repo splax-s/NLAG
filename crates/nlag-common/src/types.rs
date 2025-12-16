@@ -119,13 +119,16 @@ pub enum Protocol {
     Http2,
     /// WebSocket upgrade support
     Websocket,
-    // TODO: Add gRPC, UDP support for enterprise
+    /// gRPC with HTTP/2
+    Grpc,
+    /// UDP tunneling
+    Udp,
 }
 
 impl Protocol {
     /// Check if this protocol requires TLS termination at edge
     pub fn requires_tls_termination(&self) -> bool {
-        matches!(self, Protocol::Https | Protocol::Http2)
+        matches!(self, Protocol::Https | Protocol::Http2 | Protocol::Grpc)
     }
 
     /// Get default port for this protocol
@@ -136,7 +139,19 @@ impl Protocol {
             Protocol::Https => 443,
             Protocol::Http2 => 443,
             Protocol::Websocket => 80,
+            Protocol::Grpc => 443,   // gRPC typically uses HTTPS
+            Protocol::Udp => 0,      // No default for raw UDP
         }
+    }
+
+    /// Check if this protocol uses UDP transport
+    pub fn is_udp(&self) -> bool {
+        matches!(self, Protocol::Udp)
+    }
+
+    /// Check if this protocol is gRPC
+    pub fn is_grpc(&self) -> bool {
+        matches!(self, Protocol::Grpc)
     }
 }
 
@@ -150,6 +165,8 @@ impl std::str::FromStr for Protocol {
             "https" => Ok(Protocol::Https),
             "http2" | "h2" => Ok(Protocol::Http2),
             "websocket" | "ws" => Ok(Protocol::Websocket),
+            "grpc" => Ok(Protocol::Grpc),
+            "udp" => Ok(Protocol::Udp),
             _ => Err(format!("Unknown protocol: {}", s)),
         }
     }
@@ -163,6 +180,8 @@ impl fmt::Display for Protocol {
             Protocol::Https => write!(f, "https"),
             Protocol::Http2 => write!(f, "http2"),
             Protocol::Websocket => write!(f, "websocket"),
+            Protocol::Grpc => write!(f, "grpc"),
+            Protocol::Udp => write!(f, "udp"),
         }
     }
 }
@@ -188,9 +207,51 @@ pub struct TunnelConfig {
     /// Optional custom domain (requires DNS setup)
     pub custom_domain: Option<String>,
 
-    // TODO: Add authentication options for enterprise
-    // pub auth: Option<TunnelAuth>,
-    // pub ip_allowlist: Option<Vec<IpNetwork>>,
+    /// Authentication configuration for the tunnel
+    #[serde(default)]
+    pub auth: Option<TunnelAuth>,
+
+    /// IP allowlist for restricting access
+    #[serde(default)]
+    pub ip_allowlist: Option<Vec<String>>,
+}
+
+/// Authentication options for a tunnel
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TunnelAuth {
+    /// Type of authentication
+    pub auth_type: TunnelAuthType,
+
+    /// Username for basic auth
+    pub username: Option<String>,
+
+    /// Password hash for basic auth (bcrypt)
+    pub password_hash: Option<String>,
+
+    /// OAuth provider configuration
+    pub oauth_provider: Option<String>,
+
+    /// OAuth client ID
+    pub oauth_client_id: Option<String>,
+
+    /// Allowed OAuth domains (e.g., "@company.com")
+    pub oauth_allowed_domains: Option<Vec<String>>,
+}
+
+/// Types of tunnel authentication
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TunnelAuthType {
+    /// No authentication
+    None,
+    /// HTTP Basic Authentication
+    Basic,
+    /// OAuth 2.0 / OpenID Connect
+    OAuth,
+    /// API Key in header
+    ApiKey,
+    /// Mutual TLS (client certificate)
+    Mtls,
 }
 
 impl TunnelConfig {
@@ -203,6 +264,8 @@ impl TunnelConfig {
             local_host: "127.0.0.1".to_string(),
             subdomain: None,
             custom_domain: None,
+            auth: None,
+            ip_allowlist: None,
         }
     }
 
@@ -236,14 +299,23 @@ pub struct AgentCredentials {
     /// Token expiration timestamp
     pub expires_at: chrono::DateTime<chrono::Utc>,
 
-    // TODO: Add certificate fingerprint for mTLS binding
-    // pub cert_fingerprint: Option<String>,
+    /// Certificate fingerprint for mTLS binding (SHA-256 hex)
+    #[serde(default)]
+    pub cert_fingerprint: Option<String>,
 }
 
 impl AgentCredentials {
     /// Check if the credentials have expired
     pub fn is_expired(&self) -> bool {
         chrono::Utc::now() >= self.expires_at
+    }
+
+    /// Verify that the provided certificate fingerprint matches
+    pub fn verify_cert_fingerprint(&self, fingerprint: &str) -> bool {
+        match &self.cert_fingerprint {
+            Some(expected) => expected.eq_ignore_ascii_case(fingerprint),
+            None => true, // No fingerprint bound, accept any
+        }
     }
 }
 

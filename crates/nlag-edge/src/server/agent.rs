@@ -308,13 +308,7 @@ async fn handle_open_tunnel(
     }
 
     // Build public URL
-    let public_url = format!(
-        "{}://{}.{}:{}",
-        domain_config.scheme,
-        subdomain,
-        domain_config.base_domain,
-        8080 // TODO: Get from config
-    );
+    let public_url = domain_config.build_public_url(&subdomain);
 
     // Register the tunnel
     match registry.register_tunnel(agent_id, tunnel_config.clone(), subdomain.clone(), public_url.clone()) {

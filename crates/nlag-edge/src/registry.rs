@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 
 use nlag_common::{
@@ -84,12 +85,17 @@ pub struct TunnelEntry {
     pub subdomain: String,
     /// Public URL
     pub public_url: String,
-    /// When the tunnel was created
+    /// When the tunnel was created (monotonic)
     pub created_at: Instant,
+    /// When the tunnel was created (wall clock)
+    pub created_at_utc: DateTime<Utc>,
     /// Statistics
     pub bytes_in: AtomicU64,
     pub bytes_out: AtomicU64,
-    pub connection_count: AtomicU64,
+    /// Active connection count
+    pub active_connections: AtomicU64,
+    /// Total connections ever made
+    pub total_connections: AtomicU64,
 }
 
 impl Registry {
@@ -207,9 +213,11 @@ impl Registry {
             subdomain: subdomain.clone(),
             public_url,
             created_at: Instant::now(),
+            created_at_utc: Utc::now(),
             bytes_in: AtomicU64::new(0),
             bytes_out: AtomicU64::new(0),
-            connection_count: AtomicU64::new(0),
+            active_connections: AtomicU64::new(0),
+            total_connections: AtomicU64::new(0),
         };
 
         // Add to agent's tunnel list
@@ -317,11 +325,37 @@ impl Registry {
             tunnel_id: tunnel.tunnel_id,
             state: tunnel.state,
             public_url: Some(tunnel.public_url.clone()),
-            active_connections: 0, // TODO: Track this properly
+            active_connections: tunnel.active_connections.load(Ordering::Relaxed) as u32,
             bytes_in: tunnel.bytes_in.load(Ordering::Relaxed),
             bytes_out: tunnel.bytes_out.load(Ordering::Relaxed),
-            created_at: chrono::Utc::now(), // TODO: Store actual time
+            created_at: tunnel.created_at_utc,
         })
+    }
+
+    /// Record a new connection starting on a tunnel
+    pub fn record_connection_start(&self, tunnel_id: &TunnelId) {
+        if let Some(tunnel) = self.tunnels.get(tunnel_id) {
+            tunnel.active_connections.fetch_add(1, Ordering::Relaxed);
+            tunnel.total_connections.fetch_add(1, Ordering::Relaxed);
+            self.stats.total_connections.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Record a connection ending on a tunnel
+    pub fn record_connection_end(&self, tunnel_id: &TunnelId) {
+        if let Some(tunnel) = self.tunnels.get(tunnel_id) {
+            tunnel.active_connections.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Record bytes transferred on a tunnel
+    pub fn record_bytes(&self, tunnel_id: &TunnelId, bytes_in: u64, bytes_out: u64) {
+        if let Some(tunnel) = self.tunnels.get(tunnel_id) {
+            tunnel.bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
+            tunnel.bytes_out.fetch_add(bytes_out, Ordering::Relaxed);
+            self.stats.total_bytes_in.fetch_add(bytes_in, Ordering::Relaxed);
+            self.stats.total_bytes_out.fetch_add(bytes_out, Ordering::Relaxed);
+        }
     }
 
     /// Generate a unique subdomain

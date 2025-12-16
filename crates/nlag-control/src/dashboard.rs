@@ -87,21 +87,54 @@ async fn tunnels_page(State(_state): State<Arc<ApiState>>) -> impl IntoResponse 
 
 /// Get dashboard data as JSON
 async fn dashboard_data(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
-    // TODO: Get real data from store/registry
-    let _ = state;
-    
+    // Get stats from store
+    let stats = state.store.get_stats().await.unwrap_or_else(|_| crate::api::StatsResponse {
+        total_users: 0,
+        total_agents: 0,
+        total_tunnels: 0,
+        active_connections: 0,
+        bytes_transferred_24h: 0,
+    });
+
+    // Get metrics from store
+    let (bytes_transferred, requests, _active_connections) = state.store.get_metrics();
+
+    // Calculate uptime (assuming server start time is tracked)
+    static START_TIME: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let uptime = START_TIME.get_or_init(std::time::Instant::now).elapsed().as_secs();
+
+    // Get agents from store
+    let agents_list = state.store.list_agents("__all__").await.unwrap_or_default();
+    let agents: Vec<AgentSummary> = agents_list.iter().map(|a| AgentSummary {
+        id: a.id.clone(),
+        name: a.name.clone().unwrap_or_else(|| "Unnamed".to_string()),
+        status: a.status.clone(),
+        tunnels: a.tunnels.len() as u64,
+        last_seen: a.last_seen.clone(),
+    }).collect();
+
+    // Get tunnels from store (using a placeholder user for now)
+    let tunnels_list = state.store.list_tunnels("__all__").await.unwrap_or_default();
+    let tunnels: Vec<TunnelSummary> = tunnels_list.iter().map(|t| TunnelSummary {
+        id: t.id.clone(),
+        subdomain: t.subdomain.clone(),
+        protocol: t.protocol.clone(),
+        status: t.status.clone(),
+        requests: 0, // Would need per-tunnel request tracking
+    }).collect();
+
+    let active_agents = agents.iter().filter(|a| a.status == "connected").count();
+    let active_tunnels = tunnels.iter().filter(|t| t.status == "active").count();
+
     let data = DashboardData {
         stats: DashboardStats {
-            total_agents: 0,
-            active_agents: 0,
-            total_tunnels: 0,
-            active_tunnels: 0,
-            requests_per_minute: 0,
-            bytes_transferred: 0,
-            uptime_seconds: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0),
+            total_agents: stats.total_agents,
+            active_agents: active_agents as u64,
+            total_tunnels: stats.total_tunnels,
+            active_tunnels: active_tunnels as u64,
+            requests_per_minute: requests / (uptime.max(1) / 60).max(1),
+            bytes_transferred,
+            uptime_seconds: uptime,
         },
         recent_events: vec![
             DashboardEvent {
@@ -111,8 +144,8 @@ async fn dashboard_data(State(state): State<Arc<ApiState>>) -> impl IntoResponse
                 severity: "info".to_string(),
             },
         ],
-        agents: vec![],
-        tunnels: vec![],
+        agents,
+        tunnels,
     };
 
     Json(data)

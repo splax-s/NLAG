@@ -52,6 +52,7 @@ governor = { workspace = true }
 hyper = { version = "1.4", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
+http = "1"
 
 # Metrics
 prometheus = "0.13"

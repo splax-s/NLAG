@@ -192,11 +192,41 @@ async fn handle_public_connection(
             }
         }
         None => {
-            // Not HTTP - treat as raw TCP
-            // TODO: Support SNI-based routing for TLS
-            let response = "HTTP/1.1 400 Bad Request\r\n\r\nCould not determine tunnel\n";
-            stream.write_all(response.as_bytes()).await?;
-            return Err(anyhow::anyhow!("Could not determine tunnel (non-HTTP)"));
+            // Not HTTP - try SNI-based routing for TLS connections
+            if let Some(sni_host) = extract_tls_sni(&peek_buf[..n]) {
+                debug!("TLS connection with SNI: {}", sni_host);
+                
+                // Extract subdomain from SNI hostname
+                if let Some(subdomain) = extract_subdomain(&sni_host, &domain_config.base_domain) {
+                    // Check rate limit
+                    if !rate_limiter.check(&subdomain) {
+                        // For TLS, we can't send HTTP response, just close connection
+                        return Err(anyhow::anyhow!("Rate limit exceeded for SNI host: {}", sni_host));
+                    }
+
+                    match registry.get_tunnel_by_subdomain(&subdomain) {
+                        Some(tid) => {
+                            let metadata = StreamMetadata {
+                                host: Some(sni_host),
+                                path: None,
+                                method: None,
+                                headers: vec![],
+                            };
+                            (tid, Some(metadata))
+                        }
+                        None => {
+                            return Err(anyhow::anyhow!("Tunnel not found for SNI: {}", subdomain));
+                        }
+                    }
+                } else {
+                    return Err(anyhow::anyhow!("Invalid SNI hostname: {}", sni_host));
+                }
+            } else {
+                // Neither HTTP nor TLS with SNI - can't route
+                let response = "HTTP/1.1 400 Bad Request\r\n\r\nCould not determine tunnel\n";
+                stream.write_all(response.as_bytes()).await?;
+                return Err(anyhow::anyhow!("Could not determine tunnel (non-HTTP, no SNI)"));
+            }
         }
     };
 
@@ -468,6 +498,132 @@ fn extract_websocket_key(data: &[u8]) -> Option<String> {
             return Some(line[18..].trim().to_string());
         }
     }
+    None
+}
+
+/// Extract SNI (Server Name Indication) from a TLS ClientHello message
+///
+/// TLS ClientHello structure:
+/// - Record layer: 5 bytes (type=0x16, version, length)
+/// - Handshake header: 4 bytes (type=0x01 for ClientHello, length)
+/// - Client version: 2 bytes
+/// - Random: 32 bytes
+/// - Session ID: 1 byte length + data
+/// - Cipher suites: 2 byte length + data
+/// - Compression methods: 1 byte length + data
+/// - Extensions: 2 byte length, then extension list
+/// - SNI extension (type 0x0000): contains hostname
+fn extract_tls_sni(data: &[u8]) -> Option<String> {
+    // Minimum TLS record: 5 byte header + 4 byte handshake header
+    if data.len() < 9 {
+        return None;
+    }
+
+    // Check TLS record layer
+    // Content type: 0x16 (Handshake)
+    if data[0] != 0x16 {
+        return None;
+    }
+
+    // Check record version (TLS 1.0/1.1/1.2/1.3 all use 0x0301 in record layer)
+    // We accept 0x0300 (SSL 3.0) through 0x0304 (TLS 1.3)
+    if data[1] != 0x03 || data[2] > 0x04 {
+        return None;
+    }
+
+    // Record length
+    let record_len = ((data[3] as usize) << 8) | (data[4] as usize);
+    if data.len() < 5 + record_len {
+        return None; // Incomplete record
+    }
+
+    // Handshake type: 0x01 (ClientHello)
+    if data[5] != 0x01 {
+        return None;
+    }
+
+    // Handshake length (3 bytes)
+    let handshake_len = ((data[6] as usize) << 16) | ((data[7] as usize) << 8) | (data[8] as usize);
+    if data.len() < 9 + handshake_len {
+        return None;
+    }
+
+    let mut pos = 9; // Start of ClientHello body
+
+    // Skip client version (2 bytes)
+    pos += 2;
+    if pos + 32 > data.len() {
+        return None;
+    }
+
+    // Skip random (32 bytes)
+    pos += 32;
+
+    // Session ID
+    if pos >= data.len() {
+        return None;
+    }
+    let session_id_len = data[pos] as usize;
+    pos += 1 + session_id_len;
+    if pos + 2 > data.len() {
+        return None;
+    }
+
+    // Cipher suites
+    let cipher_suites_len = ((data[pos] as usize) << 8) | (data[pos + 1] as usize);
+    pos += 2 + cipher_suites_len;
+    if pos >= data.len() {
+        return None;
+    }
+
+    // Compression methods
+    let compression_len = data[pos] as usize;
+    pos += 1 + compression_len;
+    if pos + 2 > data.len() {
+        return None;
+    }
+
+    // Extensions length
+    let extensions_len = ((data[pos] as usize) << 8) | (data[pos + 1] as usize);
+    pos += 2;
+
+    let extensions_end = pos + extensions_len;
+    if extensions_end > data.len() {
+        return None;
+    }
+
+    // Parse extensions looking for SNI (type 0x0000)
+    while pos + 4 <= extensions_end {
+        let ext_type = ((data[pos] as u16) << 8) | (data[pos + 1] as u16);
+        let ext_len = ((data[pos + 2] as usize) << 8) | (data[pos + 3] as usize);
+        pos += 4;
+
+        if pos + ext_len > extensions_end {
+            return None;
+        }
+
+        if ext_type == 0x0000 {
+            // SNI extension
+            // SNI list length (2 bytes)
+            if ext_len < 5 {
+                return None;
+            }
+
+            let _sni_list_len = ((data[pos] as usize) << 8) | (data[pos + 1] as usize);
+            let name_type = data[pos + 2];
+            let name_len = ((data[pos + 3] as usize) << 8) | (data[pos + 4] as usize);
+
+            if name_type == 0 && pos + 5 + name_len <= extensions_end {
+                // Host name type
+                return std::str::from_utf8(&data[pos + 5..pos + 5 + name_len])
+                    .ok()
+                    .map(|s| s.to_string());
+            }
+        }
+
+        pos += ext_len;
+    }
+
     None
 }
 

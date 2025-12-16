@@ -81,11 +81,6 @@ pub fn create_client_config(config: &TlsConfig) -> Result<ClientConfig> {
             .with_no_client_auth()
     };
 
-    // TODO: Add client certificate support for mTLS
-    // if let (Some(cert_path), Some(key_path)) = (&config.cert_path, &config.key_path) {
-    //     // Load client cert and key
-    // }
-
     Ok(config)
 }
 
@@ -99,13 +94,97 @@ pub fn create_server_config(cert_pem: &str, key_pem: &str) -> Result<ServerConfi
     // Parse private key
     let key = load_key_from_pem(key_pem)?;
 
-    // Build config
+    // Build config without client auth
     let config = ServerConfig::builder()
-        .with_no_client_auth() // TODO: Enable mTLS for agent authentication
+        .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|e| NlagError::TlsError(format!("Failed to create server config: {}", e)))?;
 
     Ok(config)
+}
+
+/// Create a TLS server configuration with mTLS (mutual TLS) client authentication
+///
+/// This creates a server configuration that requires client certificates for agent authentication.
+pub fn create_mtls_server_config(
+    cert_pem: &str,
+    key_pem: &str,
+    client_ca_pem: &str,
+) -> Result<ServerConfig> {
+    // Parse server certificate chain
+    let certs = load_certs_from_pem(cert_pem)?;
+
+    // Parse server private key
+    let key = load_key_from_pem(key_pem)?;
+
+    // Load client CA certificates
+    let client_root_store = load_root_certs_from_pem(client_ca_pem)?;
+
+    // Create client cert verifier
+    let client_verifier = rustls::server::WebPkiClientVerifier::builder(
+        Arc::new(client_root_store)
+    )
+    .build()
+    .map_err(|e| NlagError::TlsError(format!("Failed to create client verifier: {}", e)))?;
+
+    // Build config with client authentication
+    let config = ServerConfig::builder()
+        .with_client_cert_verifier(client_verifier)
+        .with_single_cert(certs, key)
+        .map_err(|e| NlagError::TlsError(format!("Failed to create mTLS server config: {}", e)))?;
+
+    Ok(config)
+}
+
+/// Create a TLS client configuration with client certificate for mTLS
+///
+/// This creates a client configuration that presents a certificate to the server.
+pub fn create_mtls_client_config(
+    config: &TlsConfig,
+    client_cert_pem: &str,
+    client_key_pem: &str,
+) -> Result<ClientConfig> {
+    let builder = ClientConfig::builder();
+
+    // Build root cert store
+    let root_store = if let Some(ca_path) = &config.ca_cert_path {
+        // Load custom CA
+        let ca_pem = std::fs::read_to_string(ca_path)
+            .map_err(|e| NlagError::CertificateError(format!("Failed to read CA cert: {}", e)))?;
+        load_root_certs_from_pem(&ca_pem)?
+    } else {
+        // Use system roots
+        let mut root_store = RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        root_store
+    };
+
+    // Load client certificate and key
+    let client_certs = load_certs_from_pem(client_cert_pem)?;
+    let client_key = load_key_from_pem(client_key_pem)?;
+
+    let client_config = builder
+        .with_root_certificates(root_store)
+        .with_client_auth_cert(client_certs, client_key)
+        .map_err(|e| NlagError::TlsError(format!("Failed to set client certificate: {}", e)))?;
+
+    Ok(client_config)
+}
+
+/// Extract certificate fingerprint (SHA-256) from a certificate
+pub fn get_cert_fingerprint(cert_pem: &str) -> Result<String> {
+    use sha2::{Sha256, Digest};
+    
+    let certs = load_certs_from_pem(cert_pem)?;
+    let cert = certs.first().ok_or_else(|| {
+        NlagError::CertificateError("No certificate found".to_string())
+    })?;
+
+    let mut hasher = Sha256::new();
+    hasher.update(cert.as_ref());
+    let result = hasher.finalize();
+
+    Ok(hex::encode(result))
 }
 
 /// Load certificates from PEM data

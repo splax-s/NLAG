@@ -9,10 +9,13 @@
 //! Production: Replace with PostgreSQL implementation
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
 use anyhow::{anyhow, Result};
+use bcrypt::{hash, verify, DEFAULT_COST};
 use chrono::{DateTime, Utc};
+use sha2::{Sha256, Digest};
 use uuid::Uuid;
 
 use crate::api::{AgentResponse, StatsResponse, TokenResponse, TunnelResponse};
@@ -72,6 +75,10 @@ pub struct Store {
     agents: RwLock<HashMap<String, Agent>>,
     tokens: RwLock<HashMap<String, ApiToken>>,
     subdomains: RwLock<HashMap<String, String>>, // subdomain -> tunnel_id
+    // Metrics tracking
+    bytes_transferred_total: AtomicU64,
+    requests_total: AtomicU64,
+    active_connections: AtomicU64,
 }
 
 impl Store {
@@ -84,6 +91,9 @@ impl Store {
             agents: RwLock::new(HashMap::new()),
             tokens: RwLock::new(HashMap::new()),
             subdomains: RwLock::new(HashMap::new()),
+            bytes_transferred_total: AtomicU64::new(0),
+            requests_total: AtomicU64::new(0),
+            active_connections: AtomicU64::new(0),
         }
     }
 
@@ -102,10 +112,14 @@ impl Store {
             return Err(anyhow!("Email already registered"));
         }
 
+        // Hash the password with bcrypt
+        let password_hash = hash(password, DEFAULT_COST)
+            .map_err(|e| anyhow!("Failed to hash password: {}", e))?;
+
         let user = User {
             id: Uuid::new_v4().to_string(),
             email: email.to_string(),
-            password_hash: password.to_string(), // TODO: Hash in production
+            password_hash,
             name: name.map(String::from),
             created_at: Utc::now(),
         };
@@ -134,7 +148,7 @@ impl Store {
         let users = self.users.read().unwrap();
         users
             .get(user_id)
-            .map(|u| u.password_hash == password) // TODO: bcrypt verify in production
+            .map(|u| verify(password, &u.password_hash).unwrap_or(false))
             .unwrap_or(false)
     }
 
@@ -258,6 +272,11 @@ impl Store {
 
         let raw_token = Uuid::new_v4().to_string();
         let token_id = Uuid::new_v4().to_string();
+
+        // Hash the token using SHA-256 for storage
+        let mut hasher = Sha256::new();
+        hasher.update(raw_token.as_bytes());
+        let token_hash = hex::encode(hasher.finalize());
         
         let expires_at = expires_in_days.map(|days| {
             Utc::now() + chrono::Duration::days(days as i64)
@@ -267,7 +286,7 @@ impl Store {
             id: token_id.clone(),
             user_id: user_id.to_string(),
             name: name.to_string(),
-            token_hash: raw_token.clone(), // TODO: Hash in production
+            token_hash,
             scopes: scopes.to_vec(),
             created_at: Utc::now(),
             expires_at,
@@ -326,9 +345,40 @@ impl Store {
             total_users: users.len() as u64,
             total_agents: agents.len() as u64,
             total_tunnels: tunnels.len() as u64,
-            active_connections: active_agents as u64,
-            bytes_transferred_24h: 0, // TODO: Implement metrics tracking
+            active_connections: self.active_connections.load(Ordering::Relaxed),
+            bytes_transferred_24h: self.bytes_transferred_total.load(Ordering::Relaxed),
         })
+    }
+
+    // === Metrics Recording ===
+
+    /// Record bytes transferred
+    pub fn record_bytes_transferred(&self, bytes: u64) {
+        self.bytes_transferred_total.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Record a request
+    pub fn record_request(&self) {
+        self.requests_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Increment active connections
+    pub fn increment_connections(&self) {
+        self.active_connections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Decrement active connections
+    pub fn decrement_connections(&self) {
+        self.active_connections.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// Get current metrics snapshot
+    pub fn get_metrics(&self) -> (u64, u64, u64) {
+        (
+            self.bytes_transferred_total.load(Ordering::Relaxed),
+            self.requests_total.load(Ordering::Relaxed),
+            self.active_connections.load(Ordering::Relaxed),
+        )
     }
 }
 

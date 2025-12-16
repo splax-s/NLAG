@@ -6,6 +6,8 @@
 //! - Tunnel configuration management
 //! - Metrics and monitoring
 //! - Admin API
+//! - API Key management
+//! - Billing and usage tracking
 //!
 //! ## Architecture
 //!
@@ -13,17 +15,20 @@
 //! - Independent scaling
 //! - High availability through replication
 //! - Separation of concerns (auth vs traffic)
-//!
-//! TODO: This is a stub implementation. Full implementation needed for production.
 
 use clap::Parser;
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
 mod api;
+mod apikeys;
 mod auth;
+mod billing;
 mod dashboard;
 mod store;
+
+use apikeys::ApiKeyManager;
+use billing::BillingManager;
 
 /// NLAG Control Plane
 #[derive(Parser, Debug)]
@@ -70,12 +75,28 @@ async fn main() -> anyhow::Result<()> {
         "insecure-dev-secret-change-in-production".to_string()
     });
 
+    let webhook_secret = std::env::var("BILLING_WEBHOOK_SECRET").ok();
+    if webhook_secret.is_none() {
+        tracing::warn!("BILLING_WEBHOOK_SECRET not set, webhook verification disabled");
+    }
+
     let auth_service = std::sync::Arc::new(auth::AuthService::new(&jwt_secret));
     let store = std::sync::Arc::new(store::Store::new());
+    
+    // Initialize API key manager
+    let api_key_manager = ApiKeyManager::new();
+    api_key_manager.clone().start_cleanup_task();
+    tracing::info!("API key manager initialized");
+    
+    // Initialize billing manager
+    let billing_manager = BillingManager::new(webhook_secret);
+    tracing::info!("Billing manager initialized");
 
     let api_state = std::sync::Arc::new(api::ApiState {
         auth: auth_service,
         store,
+        api_keys: api_key_manager,
+        billing: billing_manager,
     });
 
     // Combine API and Dashboard routers
@@ -84,6 +105,7 @@ async fn main() -> anyhow::Result<()> {
 
     let addr: std::net::SocketAddr = format!("0.0.0.0:{}", cli.port).parse()?;
     tracing::info!("API server listening on {}", addr);
+    tracing::info!("Dashboard available at http://{}/dashboard", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     

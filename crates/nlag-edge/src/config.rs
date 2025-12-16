@@ -1,11 +1,17 @@
 //! Edge server configuration
 
 use std::net::SocketAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::acme::AcmeConfig;
+use crate::audit::AuditConfig;
 use crate::auth::AuthConfig;
+use crate::grpc::GrpcConfig;
+use crate::region::MultiRegionConfig;
+use crate::replay::ReplayConfig;
+use crate::udp::UdpConfig;
 
 /// Edge server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +58,49 @@ pub struct EdgeConfig {
     /// Load balancer configuration
     #[serde(default)]
     pub load_balancer: LoadBalancerConfigFile,
+
+    /// ACME (Let's Encrypt) automatic TLS configuration
+    #[serde(default)]
+    pub acme: AcmeConfig,
+
+    /// gRPC tunneling configuration
+    #[serde(default)]
+    pub grpc: GrpcConfig,
+
+    /// UDP tunneling configuration
+    #[serde(default)]
+    pub udp: UdpConfig,
+
+    /// Multi-region deployment configuration
+    #[serde(default)]
+    pub multi_region: MultiRegionConfig,
+
+    /// Audit logging configuration
+    #[serde(default)]
+    pub audit: AuditConfig,
+
+    /// Replay protection configuration
+    #[serde(default)]
+    pub replay: ReplayConfig,
+
+    /// Unique identifier for this edge server
+    #[serde(default)]
+    pub edge_id: Option<String>,
+
+    /// Region configuration for multi-region deployments
+    #[serde(default)]
+    pub region: Option<RegionConfig>,
+}
+
+/// Region configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegionConfig {
+    /// Region identifier (e.g., "us-east-1")
+    pub region_id: String,
+    
+    /// Human-readable region name
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 fn default_agent_addr() -> SocketAddr {
@@ -86,6 +135,10 @@ pub struct DomainConfig {
     /// URL scheme (http or https)
     #[serde(default = "default_scheme")]
     pub scheme: String,
+
+    /// Public port for tunnel URLs (None uses default based on scheme)
+    #[serde(default)]
+    pub public_port: Option<u16>,
 }
 
 fn default_base_domain() -> String {
@@ -101,6 +154,36 @@ impl Default for DomainConfig {
         Self {
             base_domain: default_base_domain(),
             scheme: default_scheme(),
+            public_port: None,
+        }
+    }
+}
+
+impl DomainConfig {
+    /// Get the public port for URLs
+    /// Returns the configured port, or the default port for the scheme (80/443)
+    pub fn get_public_port(&self) -> u16 {
+        self.public_port.unwrap_or_else(|| {
+            match self.scheme.as_str() {
+                "https" => 443,
+                _ => 80,
+            }
+        })
+    }
+
+    /// Build a public URL for a subdomain
+    pub fn build_public_url(&self, subdomain: &str) -> String {
+        let port = self.get_public_port();
+        let default_port = match self.scheme.as_str() {
+            "https" => 443,
+            _ => 80,
+        };
+
+        if port == default_port {
+            // Omit port if it's the default for the scheme
+            format!("{}://{}.{}", self.scheme, subdomain, self.base_domain)
+        } else {
+            format!("{}://{}.{}:{}", self.scheme, subdomain, self.base_domain, port)
         }
     }
 }
@@ -351,6 +434,135 @@ strategy = "round_robin"
 
 # Health check interval in seconds
 health_check_interval_secs = 30
+
+[acme]
+# Enable automatic TLS via Let's Encrypt
+enabled = false
+
+# ACME directory URL (use staging for testing)
+# directory_url = "https://acme-v02.api.letsencrypt.org/directory"
+
+# Account email for Let's Encrypt notifications
+email = "admin@example.com"
+
+# Storage path for certificates and account keys
+storage_path = "/var/lib/nlag/acme"
+
+# Challenge type: http-01, tls-alpn-01, or dns-01
+challenge_type = "http-01"
+
+# Accept Let's Encrypt Terms of Service
+accept_tos = false
+
+# Renew certificates if expiring within this many days
+renewal_days = 30
+
+# Use Let's Encrypt staging environment for testing
+staging = true
+
+[grpc]
+# Enable gRPC tunneling support
+enabled = true
+
+# Maximum message size in bytes (default 4MB)
+max_message_size = 4194304
+
+# Enable message compression
+compression_enabled = true
+
+# Default timeout in seconds
+default_timeout_secs = 300
+
+# Enable gRPC reflection service
+reflection_enabled = false
+
+[udp]
+# Enable UDP tunneling (disabled by default)
+enabled = false
+
+# UDP listen address
+listen_addr = "0.0.0.0:4444"
+
+# Maximum packet size in bytes
+max_packet_size = 65535
+
+# Session timeout in seconds
+session_timeout_secs = 300
+
+# Maximum concurrent sessions
+max_sessions = 10000
+
+# Buffer size per session (bytes)
+buffer_size = 1048576
+
+[multi_region]
+# Enable multi-region edge deployment
+enabled = false
+
+# This edge's region ID
+region = "us-east-1"
+
+# Discovery service URL for finding other edges
+# discovery_url = "https://control.example.com/api/discovery"
+
+# Health check interval in seconds
+health_check_interval_secs = 30
+
+# Routing strategy: round_robin, least_connections, lowest_latency, weighted_random
+routing_strategy = "least_connections"
+
+# Enable cross-region failover
+enable_failover = true
+
+[audit]
+# Enable audit logging
+enabled = true
+
+# Minimum severity to log: debug, info, notice, warning, error, critical
+min_severity = "info"
+
+# Audit log file path
+# log_path = "/var/log/nlag/audit.log"
+
+# Buffer size for async logging
+buffer_size = 10000
+
+# Include sensitive data (IPs, user agents)
+include_sensitive = false
+
+# HTTP endpoint for log shipping (e.g., Elasticsearch)
+# http_endpoint = "https://logs.example.com/api/audit"
+
+# HTTP authorization header
+# http_auth_header = "Bearer your-token"
+
+[replay]
+# Enable replay protection
+enabled = false
+
+# Time window for nonce validity (seconds)
+window_secs = 300
+
+# Maximum clock skew allowed (seconds)
+max_clock_skew_secs = 60
+
+# Maximum number of nonces to track
+max_nonces = 1000000
+
+# Require HMAC signature
+require_signature = false
+
+# HMAC secret (base64 encoded)
+# hmac_secret = "your-base64-secret"
+
+# Header name for nonce
+nonce_header = "X-Nonce"
+
+# Header name for timestamp
+timestamp_header = "X-Timestamp"
+
+# Header name for signature
+signature_header = "X-Signature"
 "#.to_string()
     }
 
@@ -397,6 +609,14 @@ health_check_interval_secs = 30
             inspect: InspectConfig::default(),
             warning: WarningConfig::default(),
             load_balancer: LoadBalancerConfigFile::default(),
+            acme: AcmeConfig::default(),
+            grpc: GrpcConfig::default(),
+            udp: UdpConfig::default(),
+            multi_region: MultiRegionConfig::default(),
+            audit: AuditConfig::default(),
+            replay: ReplayConfig::default(),
+            edge_id: None,
+            region: None,
         })
     }
 }
