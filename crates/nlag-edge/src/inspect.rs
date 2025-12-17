@@ -443,12 +443,39 @@ impl RequestInspector {
         self.tunnels.remove(tunnel_id);
     }
 
+    /// List all tunnels with captured data
+    pub fn list_tunnels_with_data(&self) -> Vec<TunnelSummary> {
+        self.tunnels
+            .iter()
+            .map(|entry| {
+                let tunnel_id = *entry.key();
+                let storage = entry.value();
+                TunnelSummary {
+                    tunnel_id,
+                    request_count: storage.len(),
+                    total_requests: storage.total_count.load(Ordering::Relaxed),
+                }
+            })
+            .collect()
+    }
+
     fn get_or_create_tunnel(&self, tunnel_id: TunnelId) -> Arc<TunnelRequests> {
         self.tunnels
             .entry(tunnel_id)
             .or_insert_with(|| Arc::new(TunnelRequests::new()))
             .clone()
     }
+}
+
+/// Summary of a tunnel for listing
+#[derive(Debug, Clone, Serialize)]
+pub struct TunnelSummary {
+    /// Tunnel ID
+    pub tunnel_id: TunnelId,
+    /// Number of requests currently captured
+    pub request_count: usize,
+    /// Total requests processed
+    pub total_requests: u64,
 }
 
 /// Statistics for tunnel inspection

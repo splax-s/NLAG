@@ -30,22 +30,22 @@ pub fn create_inspect_router(inspector: Arc<RequestInspector>) -> Router {
 
     Router::new()
         // Main inspect UI
-        .route("/", get(inspect_home))
-        .route("/ui", get(inspect_ui))
-        .route("/ui/:tunnel_id", get(inspect_tunnel_ui))
+        .route("/inspect", get(inspect_home))
+        .route("/inspect/ui", get(inspect_ui))
+        .route("/inspect/ui/:tunnel_id", get(inspect_tunnel_ui))
         
         // API endpoints
-        .route("/api/tunnels", get(list_tunnels))
-        .route("/api/tunnels/:tunnel_id/requests", get(list_requests))
-        .route("/api/tunnels/:tunnel_id/requests/:request_id", get(get_request))
-        .route("/api/tunnels/:tunnel_id/requests", post(clear_requests))
-        .route("/api/tunnels/:tunnel_id/stats", get(get_stats))
+        .route("/inspect/api/tunnels", get(list_tunnels))
+        .route("/inspect/api/tunnels/:tunnel_id/requests", get(list_requests))
+        .route("/inspect/api/tunnels/:tunnel_id/requests/:request_id", get(get_request))
+        .route("/inspect/api/tunnels/:tunnel_id/requests", post(clear_requests))
+        .route("/inspect/api/tunnels/:tunnel_id/stats", get(get_stats))
         
         // WebSocket for live updates
-        .route("/ws/:tunnel_id", get(websocket_handler))
+        .route("/inspect/ws/:tunnel_id", get(websocket_handler))
         
         // Static assets
-        .route("/assets/style.css", get(style_css))
+        .route("/inspect/assets/style.css", get(style_css))
         .with_state(state)
 }
 
@@ -80,9 +80,9 @@ async fn inspect_tunnel_ui(Path(tunnel_id): Path<String>) -> impl IntoResponse {
 
 /// List tunnels with captured requests
 async fn list_tunnels(State(state): State<Arc<InspectUiState>>) -> impl IntoResponse {
-    // For now, return empty - in production this would list tunnels with captured data
+    let tunnels = state.inspector.list_tunnels_with_data();
     Json(serde_json::json!({
-        "tunnels": []
+        "tunnels": tunnels
     }))
 }
 
@@ -251,6 +251,29 @@ const INSPECT_HOME_HTML: &str = r#"<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NLAG Inspect</title>
     <link rel="stylesheet" href="/inspect/assets/style.css">
+    <style>
+        .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+        .header { text-align: center; margin-bottom: 2rem; }
+        .header h1 { font-size: 2.5rem; margin-bottom: 0.5rem; }
+        .header p { color: #666; }
+        .tunnels-section { margin-bottom: 2rem; }
+        .tunnels-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 1rem; }
+        .tunnel-card { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1.5rem; cursor: pointer; transition: all 0.2s; }
+        .tunnel-card:hover { border-color: #4f46e5; box-shadow: 0 4px 12px rgba(79, 70, 229, 0.15); transform: translateY(-2px); }
+        .tunnel-id { font-family: monospace; font-size: 0.9rem; color: #4f46e5; word-break: break-all; margin-bottom: 0.75rem; }
+        .tunnel-stats { display: flex; gap: 1.5rem; color: #666; font-size: 0.875rem; }
+        .tunnel-stat { display: flex; align-items: center; gap: 0.25rem; }
+        .stat-icon { font-size: 1rem; }
+        .empty-state { text-align: center; padding: 3rem; background: #f9fafb; border-radius: 8px; color: #666; }
+        .empty-icon { font-size: 3rem; margin-bottom: 1rem; }
+        .card { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1.5rem; margin-bottom: 1rem; }
+        .card h2 { margin-top: 0; margin-bottom: 1rem; font-size: 1.25rem; }
+        .card ol, .card ul { margin: 0; padding-left: 1.5rem; }
+        .card li { margin-bottom: 0.5rem; }
+        .card code { background: #f3f4f6; padding: 0.125rem 0.375rem; border-radius: 4px; font-size: 0.875rem; }
+        .footer { text-align: center; color: #999; margin-top: 2rem; font-size: 0.875rem; }
+        .loading { text-align: center; padding: 2rem; color: #666; }
+    </style>
 </head>
 <body>
     <div class="container">
@@ -260,13 +283,20 @@ const INSPECT_HOME_HTML: &str = r#"<!DOCTYPE html>
         </header>
         
         <main class="main">
+            <section class="tunnels-section">
+                <h2>Active Tunnels</h2>
+                <div id="tunnels-container" class="loading">
+                    Loading tunnels...
+                </div>
+            </section>
+            
             <div class="card">
                 <h2>How to Use</h2>
                 <p>The inspector captures HTTP requests/responses passing through your tunnels.</p>
                 <ol>
-                    <li>Start a tunnel with your agent: <code>nlag http 3000</code></li>
-                    <li>Copy the tunnel ID from the agent output</li>
-                    <li>Visit <code>/inspect/ui/{tunnel_id}</code> to see live requests</li>
+                    <li>Start a tunnel with your agent: <code>nlag expose http 3000</code></li>
+                    <li>Click on any active tunnel above to see live requests</li>
+                    <li>Or visit <code>/inspect/ui/{tunnel_id}</code> directly</li>
                 </ol>
             </div>
             
@@ -286,6 +316,55 @@ const INSPECT_HOME_HTML: &str = r#"<!DOCTYPE html>
             NLAG Edge Server
         </footer>
     </div>
+    
+    <script>
+        async function loadTunnels() {
+            try {
+                const response = await fetch('/inspect/api/tunnels');
+                const data = await response.json();
+                renderTunnels(data.tunnels || []);
+            } catch (e) {
+                document.getElementById('tunnels-container').innerHTML = 
+                    '<div class="empty-state"><p>Failed to load tunnels</p></div>';
+            }
+        }
+        
+        function renderTunnels(tunnels) {
+            const container = document.getElementById('tunnels-container');
+            
+            if (tunnels.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">📡</div>
+                        <h3>No Active Tunnels</h3>
+                        <p>Start an agent to create a tunnel and see it here</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.className = 'tunnels-grid';
+            container.innerHTML = tunnels.map(t => `
+                <div class="tunnel-card" onclick="window.location.href='/inspect/ui/${t.tunnel_id}'">
+                    <div class="tunnel-id">${t.tunnel_id}</div>
+                    <div class="tunnel-stats">
+                        <span class="tunnel-stat">
+                            <span class="stat-icon">📨</span>
+                            ${t.request_count} captured
+                        </span>
+                        <span class="tunnel-stat">
+                            <span class="stat-icon">📊</span>
+                            ${t.total_requests} total
+                        </span>
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        // Load tunnels on page load and refresh every 5 seconds
+        loadTunnels();
+        setInterval(loadTunnels, 5000);
+    </script>
 </body>
 </html>"#;
 
@@ -297,11 +376,19 @@ const INSPECT_UI_HTML: &str = r#"<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>NLAG Inspect</title>
     <link rel="stylesheet" href="/inspect/assets/style.css">
+    <style>
+        .tunnel-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 1rem; padding: 1rem; }
+        .tunnel-item { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 1rem; cursor: pointer; transition: all 0.2s; }
+        .tunnel-item:hover { border-color: #4f46e5; box-shadow: 0 2px 8px rgba(79, 70, 229, 0.15); }
+        .tunnel-item-id { font-family: monospace; font-size: 0.8rem; color: #4f46e5; word-break: break-all; margin-bottom: 0.5rem; }
+        .tunnel-item-stats { font-size: 0.875rem; color: #666; }
+    </style>
 </head>
 <body>
     <div class="inspect-app">
         <header class="inspect-header">
             <div class="header-left">
+                <a href="/inspect" class="back-link">← Home</a>
                 <h1>🔍 NLAG Inspect</h1>
             </div>
             <div class="header-right">
@@ -311,10 +398,8 @@ const INSPECT_UI_HTML: &str = r#"<!DOCTYPE html>
         </header>
         
         <main class="inspect-main">
-            <div class="empty-state">
-                <div class="empty-icon">📡</div>
-                <h2>No Tunnel Connected</h2>
-                <p>Enter a tunnel ID above to start inspecting requests</p>
+            <div id="tunnel-list" class="tunnel-list">
+                <p style="text-align: center; color: #666; grid-column: 1 / -1;">Loading tunnels...</p>
             </div>
         </main>
     </div>
@@ -330,6 +415,44 @@ const INSPECT_UI_HTML: &str = r#"<!DOCTYPE html>
         document.getElementById('tunnel-input').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') connectTunnel();
         });
+        
+        async function loadTunnels() {
+            try {
+                const response = await fetch('/inspect/api/tunnels');
+                const data = await response.json();
+                renderTunnelList(data.tunnels || []);
+            } catch (e) {
+                document.getElementById('tunnel-list').innerHTML = 
+                    '<p style="text-align: center; color: #666; grid-column: 1 / -1;">Failed to load tunnels</p>';
+            }
+        }
+        
+        function renderTunnelList(tunnels) {
+            const container = document.getElementById('tunnel-list');
+            
+            if (tunnels.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state" style="grid-column: 1 / -1;">
+                        <div class="empty-icon">📡</div>
+                        <h2>No Active Tunnels</h2>
+                        <p>Start an agent to create a tunnel, or enter a tunnel ID above</p>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = tunnels.map(t => `
+                <div class="tunnel-item" onclick="window.location.href='/inspect/ui/${t.tunnel_id}'">
+                    <div class="tunnel-item-id">${t.tunnel_id}</div>
+                    <div class="tunnel-item-stats">
+                        📨 ${t.request_count} captured &nbsp; 📊 ${t.total_requests} total
+                    </div>
+                </div>
+            `).join('');
+        }
+        
+        loadTunnels();
+        setInterval(loadTunnels, 5000);
     </script>
 </body>
 </html>"#;

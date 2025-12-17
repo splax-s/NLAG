@@ -1,6 +1,7 @@
 # NLAG - Next-Generation Low-Latency Access Gateway
 
 A production-grade secure tunneling platform built in Rust, providing:
+
 - Zero-trust security with mTLS & JWT authentication
 - Low-latency QUIC transport
 - High concurrency through stream multiplexing
@@ -11,6 +12,7 @@ A production-grade secure tunneling platform built in Rust, providing:
 ## Features
 
 ### ✅ Core Features
+
 - **QUIC Transport**: Ultra-low latency multiplexed connections
 - **HTTP/HTTPS Tunneling**: Full HTTP/1.1 and HTTP/2 support
 - **WebSocket Tunneling**: Seamless WebSocket pass-through
@@ -18,6 +20,7 @@ A production-grade secure tunneling platform built in Rust, providing:
 - **TLS Termination**: Automatic TLS with Let's Encrypt (planned) or custom certs
 
 ### ✅ Enterprise Features
+
 - **JWT Authentication**: Secure agent authentication with RS256/HS256
 - **Rate Limiting**: Per-tunnel request rate limiting with token bucket
 - **Load Balancing**: Multiple strategies (Round Robin, Least Connections, IP Hash, etc.)
@@ -26,11 +29,13 @@ A production-grade secure tunneling platform built in Rust, providing:
 - **Graceful Shutdown**: Proper connection draining
 
 ### ✅ Observability
+
 - **Prometheus Metrics**: Full metrics export for monitoring
 - **Request Inspection**: Live HTTP request/response viewer (ngrok-style)
 - **Structured Logging**: JSON logs for aggregation
 
 ### ✅ Developer Experience
+
 - **Terminal UI**: Beautiful TUI showing tunnel status and requests
 - **Dashboard**: Web-based management interface
 - **Docker Support**: Full Docker and docker-compose setup
@@ -108,6 +113,7 @@ cargo run -p nlag-control
 ### Request Inspection
 
 When the edge server is running, access the inspect UI at:
+
 - `http://localhost:4040/inspect/ui` - Main inspector interface
 - `http://localhost:4040/inspect/ui/{tunnel_id}` - Tunnel-specific view
 - `http://localhost:4040/health` - Health check endpoint
@@ -288,16 +294,19 @@ NLAG uses a binary framed protocol over QUIC streams:
 ## Security
 
 ### Transport Security
+
 - TLS 1.3 only (no downgrade attacks)
 - QUIC with built-in encryption
 - Strong cipher suites
 
 ### Authentication
+
 - Token-based authentication
 - mTLS support (TODO)
 - Short-lived certificates (TODO)
 
 ### Defensive Defaults
+
 - Rate limiting per tunnel
 - Connection limits
 - Strict certificate validation

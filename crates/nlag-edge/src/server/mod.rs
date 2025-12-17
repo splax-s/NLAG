@@ -13,12 +13,15 @@ pub mod public;
 pub mod rate_limit;
 pub mod tcp;
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::signal;
 use tokio::sync::watch;
 use tracing::{error, info, warn};
+
+use nlag_common::crypto::cert::generate_self_signed_cert;
 
 use crate::acme::CertificateManager;
 use crate::audit::{AuditLogger, AuditEventType};
@@ -118,6 +121,9 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
             .with_metadata("edge_id", edge_id.clone())
     ).await;
 
+    // Ensure TLS certificates are present (generate dev certs if missing)
+    ensure_tls_certificates(&config.tls)?;
+
     // Load TLS certificates
     let cert_pem = std::fs::read_to_string(&config.tls.cert_path)?;
     let key_pem = std::fs::read_to_string(&config.tls.key_path)?;
@@ -140,6 +146,7 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
         config.rate_limit.clone(),
         config.domain.clone(),
         shutdown_signal.clone(),
+        inspector.clone(),
     )?;
 
     info!("NLAG Edge server started");
@@ -166,7 +173,7 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
         info!("  Inspect UI: http://{}", inspect_addr);
         let inspect_router = create_inspect_router(inspector.clone());
         let inspect_app = axum::Router::new()
-            .nest("/inspect", inspect_router)
+            .merge(inspect_router)
             .route("/health", axum::routing::get(health_check))
             .route("/ready", axum::routing::get(readiness_check));
         
@@ -227,6 +234,42 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
     }
 
     info!("Shutdown complete");
+    Ok(())
+}
+
+/// Ensure TLS certificate and key exist; generate self-signed dev certs if missing
+fn ensure_tls_certificates(tls: &crate::config::TlsConfig) -> anyhow::Result<()> {
+    let cert_path = Path::new(&tls.cert_path);
+    let key_path = Path::new(&tls.key_path);
+
+    if cert_path.exists() && key_path.exists() {
+        return Ok(());
+    }
+
+    warn!(
+        "TLS certificates missing at {:?} and {:?}, generating self-signed development certs",
+        cert_path,
+        key_path
+    );
+
+    if let Some(dir) = cert_path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    if let Some(dir) = key_path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    let cert_info = generate_self_signed_cert(
+        "nlag-edge.local",
+        &vec!["localhost".to_string()],
+        &vec!["127.0.0.1".parse()?, "::1".parse()?],
+        30,
+        false,
+    )?;
+
+    std::fs::write(cert_path, &cert_info.cert_pem)?;
+    std::fs::write(key_path, &cert_info.key_pem)?;
+
     Ok(())
 }
 

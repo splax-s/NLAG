@@ -21,6 +21,7 @@ use nlag_common::{
 };
 
 use crate::config::{DomainConfig, RateLimitConfig};
+use crate::inspect::RequestInspector;
 use crate::logging::HttpRequestLog;
 use crate::metrics;
 use crate::registry::Registry;
@@ -35,6 +36,7 @@ pub struct PublicListener {
     domain_config: DomainConfig,
     stream_counter: AtomicU64,
     shutdown: ShutdownSignal,
+    inspector: Arc<RequestInspector>,
 }
 
 impl PublicListener {
@@ -45,6 +47,7 @@ impl PublicListener {
         rate_config: RateLimitConfig,
         domain_config: DomainConfig,
         shutdown: ShutdownSignal,
+        inspector: Arc<RequestInspector>,
     ) -> anyhow::Result<Self> {
         let listener = std::net::TcpListener::bind(bind_addr)?;
         listener.set_nonblocking(true)?;
@@ -59,6 +62,7 @@ impl PublicListener {
             domain_config,
             stream_counter: AtomicU64::new(0),
             shutdown,
+            inspector,
         })
     }
 
@@ -97,11 +101,12 @@ impl PublicListener {
             let domain_config = self.domain_config.clone();
             let rate_limiter = self.rate_limiter.clone();
             let stream_id = StreamId(self.stream_counter.fetch_add(1, Ordering::Relaxed));
+            let inspector = self.inspector.clone();
 
             // Spawn handler for this connection
             tokio::spawn(async move {
                 if let Err(e) =
-                    handle_public_connection(stream, addr, registry, domain_config, rate_limiter, stream_id)
+                    handle_public_connection(stream, addr, registry, domain_config, rate_limiter, stream_id, inspector)
                         .await
                 {
                     debug!("Public connection from {} ended: {}", addr, e);
@@ -121,6 +126,7 @@ async fn handle_public_connection(
     domain_config: DomainConfig,
     rate_limiter: RateLimiter,
     stream_id: StreamId,
+    inspector: Arc<RequestInspector>,
 ) -> anyhow::Result<()> {
     let request_start = Instant::now();
 
@@ -241,10 +247,30 @@ async fn handle_public_connection(
     let log_path = metadata.as_ref().and_then(|m| m.path.clone());
     let log_host = metadata.as_ref().and_then(|m| m.host.clone());
 
+    // Start request inspection
+    let inspect_request_id = inspector.start_request(
+        tunnel_id,
+        log_method.as_deref().unwrap_or("UNKNOWN"),
+        log_path.as_deref().unwrap_or("/"),
+        &source_addr.ip().to_string(),
+    );
+
+    // Set request headers if we have them
+    if let Some(req_id) = inspect_request_id {
+        if let Some(ref meta) = metadata {
+            inspector.set_request_headers(tunnel_id, req_id, meta.headers.clone());
+        }
+    }
+
     // Get connection to agent
     let agent_conn = match registry.get_tunnel_connection(&tunnel_id) {
         Some(conn) => conn,
         None => {
+            // Mark request as failed
+            if let Some(req_id) = inspect_request_id {
+                let latency = request_start.elapsed().as_millis() as u64;
+                inspector.fail_request(tunnel_id, req_id, "Agent disconnected", latency);
+            }
             let response = "HTTP/1.1 502 Bad Gateway\r\n\r\nAgent disconnected\n";
             stream.write_all(response.as_bytes()).await?;
             metrics::record_request(log_method.as_deref().unwrap_or("UNKNOWN"), 502);
@@ -360,6 +386,17 @@ async fn handle_public_connection(
     let total_bytes_in = bytes_in.load(Ordering::Relaxed);
     let total_bytes_out = bytes_out.load(Ordering::Relaxed);
     let latency = request_start.elapsed();
+
+    // Complete request inspection
+    if let Some(req_id) = inspect_request_id {
+        inspector.complete_request(
+            tunnel_id,
+            req_id,
+            status,
+            "",
+            latency.as_millis() as u64,
+        );
+    }
 
     // Record request with method
     let method = log_method.as_deref().unwrap_or("UNKNOWN");

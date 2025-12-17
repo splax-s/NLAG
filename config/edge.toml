@@ -15,8 +15,8 @@ inspect_listen_addr = "0.0.0.0:4040"
 
 [tls]
 # These will be auto-generated in development mode
-cert_path = "/etc/nlag/certs/edge.crt"
-key_path = "/etc/nlag/certs/edge.key"
+cert_path = "./certs/edge.crt"
+key_path = "./certs/edge.key"
 
 [domain]
 base_domain = "localhost"

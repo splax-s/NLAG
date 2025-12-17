@@ -15,10 +15,10 @@ services:
       - "9090:9090"      # Prometheus metrics
       - "4040:4040"      # Inspect UI
     volumes:
-      - ./config/edge.toml:/etc/nlag/edge.toml:ro,delegated
+      - ./config/edge.toml:/etc/nlag/edge.toml:ro 
       - edge-certs:/etc/nlag/certs:delegated
     environment:
-      - RUST_LOG=nlag=debug,nlag_common=debug
+      - RUST_LOG=nlag_edge=debug,nlag=debug,nlag_common=debug
     networks:
       - nlag
     healthcheck:
@@ -35,11 +35,12 @@ services:
       target: control
     ports:
       - "3000:3000"      # Dashboard & API
+    command: ["--port", "3000"]
     volumes:
-      - ./config/control.toml:/etc/nlag/control.toml:ro,delegated
+      - ./config/control.toml:/etc/nlag/control.toml:ro 
       - control-data:/var/lib/nlag:delegated
     environment:
-      - RUST_LOG=nlag=debug,nlag_common=debug
+      - RUST_LOG=nlag_control=debug,nlag=debug,nlag_common=debug
     networks:
       - nlag
     healthcheck:
@@ -55,7 +56,7 @@ services:
     ports:
       - "9091:9090"
     volumes:
-      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro,delegated
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro 
       - prometheus-data:/prometheus:delegated
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
@@ -72,7 +73,7 @@ services:
       - "3001:3000"
     volumes:
       - grafana-data:/var/lib/grafana:delegated
-      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro,delegated
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro 
     environment:
       - GF_SECURITY_ADMIN_USER=admin
       - GF_SECURITY_ADMIN_PASSWORD=admin
