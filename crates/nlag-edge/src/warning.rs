@@ -185,7 +185,7 @@ impl WarningPageManager {
         tunnel_id: &TunnelId,
         client_ip: &str,
         headers: &[(String, String)],
-        path: &str,
+        _path: &str,
     ) -> bool {
         let config = self.config.read();
         

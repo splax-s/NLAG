@@ -28,10 +28,14 @@ use nlag_common::{
 };
 
 use crate::config::{AgentConfig, TunnelOptions};
-use crate::ui::{self, UiEvent, UiHandle, TunnelInfo, HttpRequest};
+use crate::ui::{self, UiHandle, TunnelInfo, WidgetConfig};
 
 /// Run tunnel with the beautiful TUI
-pub async fn run_tunnel_with_ui(config: AgentConfig, tunnel_opts: TunnelOptions) -> anyhow::Result<()> {
+pub async fn run_tunnel_with_ui(
+    config: AgentConfig, 
+    tunnel_opts: TunnelOptions,
+    widget_config: WidgetConfig,
+) -> anyhow::Result<()> {
     let local_addr = format!("{}:{}", tunnel_opts.local_host, tunnel_opts.local_port);
     let edge_addr = config.edge_addr.clone();
 
@@ -48,8 +52,8 @@ pub async fn run_tunnel_with_ui(config: AgentConfig, tunnel_opts: TunnelOptions)
         })
     };
 
-    // Run the UI (blocking)
-    let ui_result = ui::run_ui(event_rx, local_addr, edge_addr).await;
+    // Run the UI (blocking) with widget config
+    let ui_result = ui::run_ui(event_rx, local_addr, edge_addr, widget_config).await;
 
     // Cancel the tunnel task when UI exits
     tunnel_handle.abort();

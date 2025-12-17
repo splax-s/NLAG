@@ -14,8 +14,6 @@ use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::sync::Arc;
-use tokio::net::TcpStream;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use nlag_common::types::TunnelId;
 
@@ -388,7 +386,7 @@ async fn websocket_handler(
 
 /// Handle WebSocket connection with heartbeat and efficient event batching
 async fn handle_websocket(socket: WebSocket, state: Arc<InspectUiState>, tunnel_id: TunnelId) {
-    let (mut sender, mut receiver) = socket.split();
+    let (sender, mut receiver) = socket.split();
     
     // Subscribe to events
     let mut event_rx = state.inspector.subscribe();

@@ -3,7 +3,6 @@
 //! Exposes metrics at /metrics endpoint for Prometheus scraping.
 
 use std::net::SocketAddr;
-use std::sync::Arc;
 
 use hyper::{Request, Response, StatusCode, body::Incoming};
 use hyper::server::conn::http1;
@@ -12,9 +11,9 @@ use hyper_util::rt::TokioIo;
 use http_body_util::Full;
 use bytes::Bytes;
 use prometheus::{
-    Counter, CounterVec, Gauge, GaugeVec, Histogram, HistogramVec,
-    Encoder, TextEncoder, Registry as PrometheusRegistry,
-    register_counter, register_counter_vec, register_gauge, register_gauge_vec,
+    Counter, CounterVec, Gauge, Histogram, HistogramVec,
+    Encoder, TextEncoder,
+    register_counter, register_counter_vec, register_gauge,
     register_histogram, register_histogram_vec,
 };
 use lazy_static::lazy_static;

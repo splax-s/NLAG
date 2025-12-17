@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use tokio::sync::Semaphore;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use nlag_common::types::TunnelId;
 

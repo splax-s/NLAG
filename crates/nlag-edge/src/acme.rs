@@ -3,6 +3,8 @@
 //! This module provides automatic TLS certificate provisioning using the ACME protocol.
 //! It supports both HTTP-01 and TLS-ALPN-01 challenges.
 
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;

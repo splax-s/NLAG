@@ -49,6 +49,22 @@ pub enum Commands {
         /// Skip TLS verification (DANGEROUS - dev only)
         #[arg(short = 'k', long)]
         insecure: bool,
+
+        /// Show request rate sparkline graph
+        #[arg(long)]
+        sparkline: bool,
+
+        /// Show latency gauge visualization
+        #[arg(long)]
+        latency_gauge: bool,
+
+        /// Show detailed request cards with more info
+        #[arg(long)]
+        request_details: bool,
+
+        /// Show connection health indicator
+        #[arg(long)]
+        health: bool,
     },
 
     /// Expose multiple local services through a single tunnel connection

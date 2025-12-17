@@ -66,6 +66,10 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             subdomain,
             edge,
             insecure,
+            sparkline,
+            latency_gauge,
+            request_details,
+            health,
         } => {
             let mut config = config::AgentConfig::load()?;
             
@@ -81,9 +85,17 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
                 local_host: local_host.clone(),
                 subdomain,
             };
+            
+            // Build widget config from CLI flags
+            let widget_config = ui::WidgetConfig {
+                sparkline,
+                latency_gauge,
+                request_details,
+                health_indicator: health,
+            };
 
             if use_tui {
-                tunnel::run_tunnel_with_ui(config, tunnel_config).await
+                tunnel::run_tunnel_with_ui(config, tunnel_config, widget_config).await
             } else {
                 tunnel::run_tunnel(config, tunnel_config).await
             }

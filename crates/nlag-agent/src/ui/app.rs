@@ -4,6 +4,7 @@ use std::collections::VecDeque;
 use chrono::Local;
 
 use super::UiEvent;
+use super::widgets::{WidgetConfig, RateTracker};
 
 /// Maximum number of requests to keep in history
 const MAX_REQUESTS: usize = 100;
@@ -76,6 +77,10 @@ pub struct AppState {
     pub requests: VecDeque<HttpRequest>,
     pub scroll_offset: usize,
     pub errors: VecDeque<String>,
+    /// Widget configuration from CLI flags
+    pub widget_config: WidgetConfig,
+    /// Rate tracker for sparkline
+    pub rate_tracker: RateTracker,
 }
 
 impl AppState {
@@ -91,7 +96,14 @@ impl AppState {
             requests: VecDeque::with_capacity(MAX_REQUESTS),
             scroll_offset: 0,
             errors: VecDeque::new(),
+            widget_config: WidgetConfig::default(),
+            rate_tracker: RateTracker::default(),
         }
+    }
+    
+    pub fn with_widget_config(mut self, config: WidgetConfig) -> Self {
+        self.widget_config = config;
+        self
     }
 
     pub fn handle_event(&mut self, event: UiEvent) {
@@ -133,6 +145,14 @@ impl AppState {
         
         // Update stats
         self.stats.total_connections += 1;
+        
+        // Track rate for sparkline
+        self.rate_tracker.record();
+    }
+    
+    /// Tick the rate tracker (call every second)
+    pub fn tick_rate(&mut self) {
+        self.rate_tracker.tick();
     }
 
     pub fn clear_requests(&mut self) {

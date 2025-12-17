@@ -36,6 +36,7 @@ pub struct ApiState {
 
 /// Authenticated user extracted from JWT token
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AuthenticatedUser {
     pub user_id: String,
     pub scopes: Vec<String>,

@@ -5,13 +5,14 @@
 //! - DNS TXT record verification for ownership
 //! - SNI-based routing for HTTPS traffic
 
-use std::collections::HashMap;
+#![allow(dead_code)]
+
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use nlag_common::types::TunnelId;
 

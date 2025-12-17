@@ -3,10 +3,12 @@
 //! Captures and stores HTTP requests/responses for live inspection,
 //! similar to ngrok's inspect interface.
 
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::Duration;
 
 use dashmap::DashMap;
 use parking_lot::RwLock;

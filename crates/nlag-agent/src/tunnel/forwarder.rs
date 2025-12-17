@@ -85,7 +85,7 @@ pub async fn forward_loop_with_ui(
     loop {
         let (send, recv) = match connection.accept_bi().await {
             Ok(streams) => streams,
-            Err(e) => {
+            Err(_e) => {
                 if connection.is_closed() {
                     break;
                 }
@@ -127,7 +127,7 @@ async fn handle_stream_with_ui(
             stats.streams_opened.fetch_add(1, Ordering::Relaxed);
             (open.stream_id, open.metadata)
         }
-        other => {
+        _other => {
             return Err(anyhow::anyhow!("Unexpected message type"));
         }
     };

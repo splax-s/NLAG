@@ -3,17 +3,14 @@
 //! This module provides support for tunneling gRPC traffic through the edge server.
 //! gRPC uses HTTP/2, so we need to handle HTTP/2 protocol specifics.
 
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
+#![allow(dead_code)]
+#![allow(unused_imports)]
 
 use bytes::Bytes;
-use futures::Stream;
 use http::{HeaderMap, HeaderValue, Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{debug, info, warn};
 
 /// gRPC specific errors
 #[derive(Debug, Error)]
@@ -278,7 +275,7 @@ impl GrpcHandler {
     
     /// Create a gRPC error response
     pub fn error_response(status: GrpcStatus, message: &str) -> Response<Full<Bytes>> {
-        let mut response = Response::builder()
+        let response = Response::builder()
             .status(status.http_status())
             .header(http::header::CONTENT_TYPE, "application/grpc")
             .header("grpc-status", (status as u8).to_string())

@@ -27,6 +27,7 @@ use crate::metrics;
 use crate::registry::Registry;
 use crate::server::rate_limit::RateLimiter;
 use crate::server::ShutdownSignal;
+use crate::warning::WarningPageManager;
 
 /// Public traffic listener
 pub struct PublicListener {
@@ -37,6 +38,7 @@ pub struct PublicListener {
     stream_counter: AtomicU64,
     shutdown: ShutdownSignal,
     inspector: Arc<RequestInspector>,
+    warning_manager: Arc<WarningPageManager>,
 }
 
 impl PublicListener {
@@ -48,6 +50,7 @@ impl PublicListener {
         domain_config: DomainConfig,
         shutdown: ShutdownSignal,
         inspector: Arc<RequestInspector>,
+        warning_manager: Arc<WarningPageManager>,
     ) -> anyhow::Result<Self> {
         let listener = std::net::TcpListener::bind(bind_addr)?;
         listener.set_nonblocking(true)?;
@@ -63,6 +66,7 @@ impl PublicListener {
             stream_counter: AtomicU64::new(0),
             shutdown,
             inspector,
+            warning_manager,
         })
     }
 
@@ -102,11 +106,12 @@ impl PublicListener {
             let rate_limiter = self.rate_limiter.clone();
             let stream_id = StreamId(self.stream_counter.fetch_add(1, Ordering::Relaxed));
             let inspector = self.inspector.clone();
+            let warning_manager = self.warning_manager.clone();
 
             // Spawn handler for this connection
             tokio::spawn(async move {
                 if let Err(e) =
-                    handle_public_connection(stream, addr, registry, domain_config, rate_limiter, stream_id, inspector)
+                    handle_public_connection(stream, addr, registry, domain_config, rate_limiter, stream_id, inspector, warning_manager)
                         .await
                 {
                     debug!("Public connection from {} ended: {}", addr, e);
@@ -127,6 +132,7 @@ async fn handle_public_connection(
     rate_limiter: RateLimiter,
     stream_id: StreamId,
     inspector: Arc<RequestInspector>,
+    warning_manager: Arc<WarningPageManager>,
 ) -> anyhow::Result<()> {
     let request_start = Instant::now();
 
@@ -234,7 +240,7 @@ async fn handle_public_connection(
     };
 
     // Get the subdomain for metrics
-    let subdomain = metadata.as_ref()
+    let _subdomain = metadata.as_ref()
         .and_then(|m| m.host.as_ref())
         .and_then(|h| extract_subdomain(h, &domain_config.base_domain))
         .unwrap_or_default();
@@ -243,6 +249,76 @@ async fn handle_public_connection(
     let log_method = metadata.as_ref().and_then(|m| m.method.clone());
     let log_path = metadata.as_ref().and_then(|m| m.path.clone());
     let log_host = metadata.as_ref().and_then(|m| m.host.clone());
+    let headers = metadata.as_ref().map(|m| m.headers.clone()).unwrap_or_default();
+    
+    // Check if this is a warning continue request
+    if let Some(ref path) = log_path {
+        if path.starts_with("/_nlag/warning/continue") {
+            // Parse query params
+            if let Some(query_start) = path.find('?') {
+                let query = &path[query_start + 1..];
+                let mut target_tunnel: Option<String> = None;
+                let mut target_path: Option<String> = None;
+                
+                for param in query.split('&') {
+                    if let Some((key, value)) = param.split_once('=') {
+                        match key {
+                            "tunnel" => target_tunnel = Some(value.to_string()),
+                            "path" => target_path = Some(urlencoding::decode(value).unwrap_or_default().to_string()),
+                            _ => {}
+                        }
+                    }
+                }
+                
+                if let Some(tid) = target_tunnel {
+                    if let Ok(parsed_tid) = tid.parse::<nlag_common::types::TunnelId>() {
+                        // Acknowledge and set cookie
+                        let cookie_value = warning_manager.acknowledge(&parsed_tid, &source_addr.ip().to_string());
+                        let redirect_path = target_path.as_deref().unwrap_or("/");
+                        
+                        let response = format!(
+                            "HTTP/1.1 302 Found\r\n\
+                             Location: {}\r\n\
+                             Set-Cookie: {}={}; Path=/; Max-Age=86400; SameSite=Lax\r\n\
+                             Content-Length: 0\r\n\
+                             \r\n",
+                            redirect_path,
+                            crate::warning::WARNING_COOKIE_NAME,
+                            cookie_value
+                        );
+                        stream.write_all(response.as_bytes()).await?;
+                        return Ok(());
+                    }
+                }
+            }
+            // Invalid continue request
+            let response = "HTTP/1.1 400 Bad Request\r\n\r\nInvalid continue request\n";
+            stream.write_all(response.as_bytes()).await?;
+            return Err(anyhow::anyhow!("Invalid warning continue request"));
+        }
+    }
+    
+    // Check if we should show warning page
+    let path_for_warning = log_path.as_deref().unwrap_or("/");
+    let host_for_warning = log_host.as_deref().unwrap_or("");
+    let client_ip = source_addr.ip().to_string();
+    
+    if warning_manager.should_show_warning(&tunnel_id, &client_ip, &headers, path_for_warning) {
+        // Serve warning page
+        let warning_html = warning_manager.generate_warning_page(&tunnel_id, host_for_warning, path_for_warning);
+        let response = format!(
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: text/html; charset=utf-8\r\n\
+             Content-Length: {}\r\n\
+             Cache-Control: no-cache, no-store, must-revalidate\r\n\
+             \r\n\
+             {}",
+            warning_html.len(),
+            warning_html
+        );
+        stream.write_all(response.as_bytes()).await?;
+        return Ok(());
+    }
 
     // Start request inspection
     let inspect_request_id = inspector.start_request(

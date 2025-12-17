@@ -339,7 +339,7 @@ impl Store {
         let agents = self.agents.read().unwrap();
         let tunnels = self.tunnels.read().unwrap();
 
-        let active_agents = agents.values().filter(|a| a.status == "connected").count();
+        let _active_agents = agents.values().filter(|a| a.status == "connected").count();
 
         Ok(StatsResponse {
             total_users: users.len() as u64,

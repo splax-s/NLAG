@@ -17,7 +17,9 @@ A production-grade secure tunneling platform built in Rust, providing:
 - **HTTP/HTTPS Tunneling**: Full HTTP/1.1 and HTTP/2 support
 - **WebSocket Tunneling**: Seamless WebSocket pass-through
 - **TCP Tunneling**: Raw TCP port forwarding
-- **TLS Termination**: Automatic TLS with Let's Encrypt (planned) or custom certs
+- **UDP Tunneling**: Raw UDP port forwarding
+- **gRPC Tunneling**: Full gRPC with HTTP/2 support
+- **TLS Termination**: Automatic TLS with custom certs (ACME planned)
 
 ### ✅ Enterprise Features
 
@@ -31,15 +33,19 @@ A production-grade secure tunneling platform built in Rust, providing:
 ### ✅ Observability
 
 - **Prometheus Metrics**: Full metrics export for monitoring
-- **Request Inspection**: Live HTTP request/response viewer (ngrok-style)
+- **Request Inspection**: Live HTTP request/response viewer with body capture
+- **Request Replay**: Re-send captured requests through tunnel
 - **Structured Logging**: JSON logs for aggregation
+- **Audit Logging**: Security event tracking with log shipping
 
 ### ✅ Developer Experience
 
-- **Terminal UI**: Beautiful TUI showing tunnel status and requests
+- **Terminal UI**: Beautiful TUI with optional widgets (sparkline, latency gauge)
 - **Dashboard**: Web-based management interface
 - **Docker Support**: Full Docker and docker-compose setup
 - **Warning Page**: Security interstitial for first-time browser visits
+- **Multi-Region Support**: Deploy edge servers across regions
+- **Replay Protection**: Security against request replay attacks
 
 ## Architecture
 
@@ -129,6 +135,12 @@ cargo run -p nlag-agent -- expose http 8080 --subdomain myapp
 
 # Expose TCP service
 cargo run -p nlag-agent -- expose tcp 3000
+
+# Expose UDP service
+cargo run -p nlag-agent -- expose udp 53
+
+# Expose gRPC service
+cargo run -p nlag-agent -- expose grpc 50051
 ```
 
 ## CLI Usage
@@ -139,10 +151,19 @@ cargo run -p nlag-agent -- expose tcp 3000
 # Expose a local service
 nlag expose <protocol> <local_port> [options]
 
+Protocols: http, https, tcp, udp, grpc, websocket, http2
+
 Options:
   -H, --local-host <HOST>   Local host to forward to (default: 127.0.0.1)
   -s, --subdomain <NAME>    Request specific subdomain
+  -e, --edge <ADDR>         Edge server address (default: localhost:4443)
+  -k, --insecure            Skip TLS verification (dev only)
   -v, --verbose             Enable verbose output
+  --no-tui                  Disable TUI, use simple logging
+  --sparkline               Show request rate sparkline graph
+  --latency-gauge           Show latency gauge visualization
+  --request-details         Show detailed request cards
+  --health                  Show connection health indicator
 
 # Show configuration
 nlag config --show
@@ -165,6 +186,18 @@ nlag expose http 8080 --local-host localhost
 
 # Request specific subdomain
 nlag expose http 8080 --subdomain my-app
+
+# Expose with TUI widgets
+nlag expose http 3000 --sparkline --latency-gauge
+
+# Expose without TUI (for scripts/CI)
+nlag expose http 3000 --no-tui
+
+# Expose gRPC service
+nlag expose grpc 50051 --subdomain api
+
+# Expose UDP (e.g., DNS or game server)
+nlag expose udp 27015 --subdomain gameserver
 ```
 
 ## Configuration
@@ -302,23 +335,22 @@ NLAG uses a binary framed protocol over QUIC streams:
 ### Authentication
 
 - Token-based authentication
-- mTLS support (TODO)
-- Short-lived certificates (TODO)
+- JWT with RS256/HS256
+- API key management
 
 ### Defensive Defaults
 
 - Rate limiting per tunnel
 - Connection limits
 - Strict certificate validation
+- Replay attack protection
+- First-visit warning page for browsers
 
-## TODO: Future Features
+## Planned Features
 
-- [ ] Let's Encrypt automatic TLS provisioning
-- [ ] gRPC tunneling
-- [ ] UDP support
-- [ ] Multi-region edge deployment
-- [ ] Audit logging with log shipping
-- [ ] Replay protection
+- [ ] Let's Encrypt automatic TLS provisioning (ACME)
+- [ ] mTLS support for agent authentication
+- [ ] Short-lived certificates
 - [ ] API key management UI
 - [ ] Billing integration
 

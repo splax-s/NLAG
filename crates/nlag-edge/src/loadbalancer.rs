@@ -3,14 +3,15 @@
 //! Provides load balancing strategies for distributing traffic
 //! across multiple agents serving the same subdomain.
 
-use std::collections::HashMap;
+#![allow(dead_code)]
+
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use parking_lot::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use nlag_common::types::{AgentId, TunnelId};
 

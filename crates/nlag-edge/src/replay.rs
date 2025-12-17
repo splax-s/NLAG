@@ -3,16 +3,14 @@
 //! This module provides protection against request replay attacks by tracking
 //! nonces, timestamps, and request signatures.
 
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
-use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Replay protection errors
 #[derive(Debug, Error)]
@@ -293,7 +291,7 @@ impl ReplayGuard {
         nonce: &str,
         timestamp: i64,
         signature: Option<&str>,
-        body: Option<&[u8]>,
+        _body: Option<&[u8]>,
         request_id: Option<&str>,
     ) -> Result<()> {
         if !self.config.enabled {

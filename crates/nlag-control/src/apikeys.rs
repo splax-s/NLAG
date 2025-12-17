@@ -3,6 +3,8 @@
 //! This module provides API key creation, validation, and management
 //! for programmatic access to the NLAG control plane.
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +13,7 @@ use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 /// API Key errors
 #[derive(Debug, Error)]

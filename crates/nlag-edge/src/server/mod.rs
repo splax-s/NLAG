@@ -32,6 +32,7 @@ use crate::inspect_ui::create_inspect_router;
 use crate::region::{RegionRegistry, RegionId};
 use crate::registry::Registry;
 use crate::replay::ReplayGuard;
+use crate::warning::{WarningPageManager, WarningPageConfig};
 
 /// Shutdown signal broadcaster
 #[derive(Clone)]
@@ -128,6 +129,29 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
     let cert_pem = std::fs::read_to_string(&config.tls.cert_path)?;
     let key_pem = std::fs::read_to_string(&config.tls.key_path)?;
 
+    // Initialize warning page manager
+    let warning_config = WarningPageConfig {
+        enabled: config.warning.enabled,
+        title: config.warning.title.clone(),
+        message: config.warning.message.clone(),
+        bypass_hosts: config.warning.bypass_hosts.iter().cloned().collect(),
+        bypass_user_agents: vec![
+            "curl".to_string(),
+            "wget".to_string(),
+            "httpie".to_string(),
+            "PostmanRuntime".to_string(),
+            "axios".to_string(),
+            "node-fetch".to_string(),
+            "python-requests".to_string(),
+            "Go-http-client".to_string(),
+            "okhttp".to_string(),
+        ],
+    };
+    let warning_manager = WarningPageManager::new(warning_config);
+    if warning_manager.is_enabled() {
+        info!("  Warning page: enabled");
+    }
+
     // Start agent listener
     let agent_listener = agent::AgentListener::new(
         config.agent_listen_addr,
@@ -147,6 +171,7 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
         config.domain.clone(),
         shutdown_signal.clone(),
         inspector.clone(),
+        warning_manager.clone(),
     )?;
 
     info!("NLAG Edge server started");

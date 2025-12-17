@@ -17,7 +17,7 @@ use tracing::{debug, error, info, warn};
 use nlag_common::{
     protocol::{
         codec::quic::{read_message, write_message},
-        message::{DataFrame, Message, StreamCloseMessage, StreamMetadata, StreamOpenMessage},
+        message::{DataFrame, Message, StreamCloseMessage, StreamOpenMessage},
     },
     types::{StreamId, TunnelId},
 };
@@ -153,7 +153,7 @@ async fn handle_tcp_connection(
     registry: Arc<Registry>,
     port: u16,
 ) -> anyhow::Result<()> {
-    let start_time = Instant::now();
+    let _start_time = Instant::now();
     let bytes_in = Arc::new(AtomicU64::new(0));
     let bytes_out = Arc::new(AtomicU64::new(0));
 

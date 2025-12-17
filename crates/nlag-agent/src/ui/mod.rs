@@ -8,9 +8,8 @@
 pub mod app;
 pub mod widgets;
 
-use std::io::{self, Stdout};
-use std::sync::Arc;
-use std::time::Duration;
+use std::io;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
@@ -20,17 +19,19 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
     Frame, Terminal,
 };
 use tokio::sync::mpsc;
 
 pub use app::{AppState, ConnectionStats, HttpRequest, TunnelInfo};
+pub use widgets::WidgetConfig;
 
 /// Events that can be sent to the UI
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum UiEvent {
     /// Tunnel successfully opened
     TunnelOpened(TunnelInfo),
@@ -71,6 +72,7 @@ impl UiHandle {
         self.send(UiEvent::HttpRequest(req));
     }
 
+    #[allow(dead_code)]
     pub fn stats_update(&self, stats: ConnectionStats) {
         self.send(UiEvent::StatsUpdate(stats));
     }
@@ -83,6 +85,7 @@ impl UiHandle {
         self.send(UiEvent::Disconnected);
     }
 
+    #[allow(dead_code)]
     pub fn latency_update(&self, latency_ms: u64) {
         self.send(UiEvent::LatencyUpdate(latency_ms));
     }
@@ -99,6 +102,7 @@ pub async fn run_ui(
     mut event_rx: mpsc::UnboundedReceiver<UiEvent>,
     local_addr: String,
     edge_addr: String,
+    widget_config: WidgetConfig,
 ) -> anyhow::Result<()> {
     // Setup terminal
     enable_raw_mode()?;
@@ -107,8 +111,11 @@ pub async fn run_ui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Initialize app state
-    let mut app = AppState::new(local_addr, edge_addr);
+    // Initialize app state with widget config
+    let mut app = AppState::new(local_addr, edge_addr).with_widget_config(widget_config);
+    
+    // Track time for rate tracker ticking
+    let mut last_rate_tick = Instant::now();
 
     // Main loop - prioritize data events over keyboard
     loop {
@@ -119,7 +126,12 @@ pub async fn run_ui(
             had_events = true;
         }
         
-        // Only redraw if we had events or it's time for a refresh
+        // Tick rate tracker every second (for sparkline)
+        if app.widget_config.sparkline && last_rate_tick.elapsed() >= Duration::from_secs(1) {
+            app.tick_rate();
+            last_rate_tick = Instant::now();
+        }
+        
         // Draw UI
         terminal.draw(|f| draw_ui(f, &app))?;
 
@@ -162,18 +174,34 @@ pub async fn run_ui(
 /// Draw the main UI
 fn draw_ui(frame: &mut Frame, app: &AppState) {
     let size = frame.area();
+    
+    // Adjust layout based on enabled widgets
+    let has_extra_widgets = app.widget_config.sparkline || app.widget_config.latency_gauge;
 
-    // Main layout: header, status, connections, requests
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .margin(1)
-        .constraints([
+    // Main layout: header, status, connections, [optional widgets], requests
+    let constraints = if has_extra_widgets {
+        vec![
+            Constraint::Length(3),  // Header
+            Constraint::Length(9),  // Status panel
+            Constraint::Length(5),  // Connection stats
+            Constraint::Length(3),  // Optional widgets row
+            Constraint::Min(8),     // HTTP requests
+            Constraint::Length(1),  // Footer
+        ]
+    } else {
+        vec![
             Constraint::Length(3),  // Header
             Constraint::Length(9),  // Status panel
             Constraint::Length(5),  // Connection stats
             Constraint::Min(8),     // HTTP requests
             Constraint::Length(1),  // Footer
-        ])
+        ]
+    };
+    
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints(constraints)
         .split(size);
 
     // Header
@@ -185,11 +213,22 @@ fn draw_ui(frame: &mut Frame, app: &AppState) {
     // Connection stats
     draw_connections(frame, chunks[2], app);
 
-    // HTTP requests
-    draw_requests(frame, chunks[3], app);
+    if has_extra_widgets {
+        // Optional widgets row
+        draw_extra_widgets(frame, chunks[3], app);
+        
+        // HTTP requests
+        draw_requests(frame, chunks[4], app);
 
-    // Footer
-    draw_footer(frame, chunks[4]);
+        // Footer
+        draw_footer(frame, chunks[5]);
+    } else {
+        // HTTP requests
+        draw_requests(frame, chunks[3], app);
+
+        // Footer
+        draw_footer(frame, chunks[4]);
+    }
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &AppState) {
@@ -308,6 +347,77 @@ fn draw_connections(frame: &mut Frame, area: Rect, app: &AppState) {
         );
 
     frame.render_widget(table, area);
+}
+
+/// Draw optional extra widgets (sparkline, latency gauge, health indicator)
+fn draw_extra_widgets(frame: &mut Frame, area: Rect, app: &AppState) {
+    use widgets::{Sparkline, Gauge, HealthIndicator};
+    
+    // Split the area based on which widgets are enabled
+    let mut constraints = Vec::new();
+    
+    if app.widget_config.sparkline {
+        constraints.push(Constraint::Percentage(40));
+    }
+    if app.widget_config.latency_gauge {
+        constraints.push(Constraint::Percentage(40));
+    }
+    if app.widget_config.health_indicator {
+        constraints.push(Constraint::Length(3));
+    }
+    // Fill remaining space
+    if constraints.is_empty() {
+        return;
+    }
+    constraints.push(Constraint::Min(0));
+    
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(constraints)
+        .split(area);
+    
+    let mut chunk_idx = 0;
+    
+    // Sparkline for request rate
+    if app.widget_config.sparkline {
+        let sparkline_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(" Rate/s ")
+            .title_style(Style::default().fg(Color::Cyan));
+        
+        let inner = sparkline_block.inner(chunks[chunk_idx]);
+        frame.render_widget(sparkline_block, chunks[chunk_idx]);
+        
+        let samples = app.rate_tracker.samples();
+        if !samples.is_empty() {
+            let sparkline = Sparkline::new(samples);
+            frame.render_widget(sparkline, inner);
+        }
+        chunk_idx += 1;
+    }
+    
+    // Latency gauge
+    if app.widget_config.latency_gauge {
+        let gauge_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(format!(" Latency: {}ms ", app.latency_ms))
+            .title_style(Style::default().fg(Color::Cyan));
+        
+        let inner = gauge_block.inner(chunks[chunk_idx]);
+        frame.render_widget(gauge_block, chunks[chunk_idx]);
+        
+        let gauge = Gauge::new(app.latency_ms, 500); // 500ms max
+        frame.render_widget(gauge, inner);
+        chunk_idx += 1;
+    }
+    
+    // Health indicator
+    if app.widget_config.health_indicator {
+        let health = HealthIndicator::new(app.is_connected, app.latency_ms);
+        frame.render_widget(health, chunks[chunk_idx]);
+    }
 }
 
 fn draw_requests(frame: &mut Frame, area: Rect, app: &AppState) {

@@ -3,6 +3,8 @@
 //! Validates JWT tokens provided by agents during connection.
 //! Tokens are issued by the control plane.
 
+#![allow(dead_code)]
+
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};

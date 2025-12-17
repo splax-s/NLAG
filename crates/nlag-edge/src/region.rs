@@ -3,7 +3,6 @@
 //! This module provides support for deploying edge servers across multiple regions
 //! with region-aware routing, failover, and health checking.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -13,7 +12,7 @@ use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// Multi-region errors
 #[derive(Debug, Error)]

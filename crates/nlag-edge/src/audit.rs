@@ -3,6 +3,8 @@
 //! This module provides structured audit logging with support for multiple
 //! destinations (file, syslog, external services) and log shipping.
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

@@ -2,7 +2,7 @@
 //!
 //! Provides structured JSON logging for all HTTP requests flowing through tunnels.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use serde::Serialize;
 use tracing::info;
@@ -137,7 +137,7 @@ impl HttpRequestLogBuilder {
     pub fn finish(self) {
         let duration = self.start_time.elapsed();
         
-        let log = HttpRequestLog {
+        let _log = HttpRequestLog {
             timestamp: chrono::Utc::now().to_rfc3339(),
             tunnel_id: self.tunnel_id.to_string(),
             stream_id: self.stream_id.0,

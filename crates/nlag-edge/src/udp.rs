@@ -3,7 +3,6 @@
 //! This module provides support for tunneling UDP traffic through the edge server.
 //! UDP packets are encapsulated and transmitted over the QUIC connection.
 
-use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -16,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 /// UDP tunneling errors
 #[derive(Debug, Error)]
