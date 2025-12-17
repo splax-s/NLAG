@@ -14,19 +14,23 @@ use axum::extract::ws::{Message, WebSocket};
 use futures::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::sync::Arc;
+use tokio::net::TcpStream;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use nlag_common::types::TunnelId;
 
 use crate::inspect::{InspectorEvent, RequestInspector};
+use crate::registry::Registry;
 
 /// State for the inspection UI
 pub struct InspectUiState {
     pub inspector: Arc<RequestInspector>,
+    pub registry: Arc<Registry>,
 }
 
 /// Create the inspection UI router
-pub fn create_inspect_router(inspector: Arc<RequestInspector>) -> Router {
-    let state = Arc::new(InspectUiState { inspector });
+pub fn create_inspect_router(inspector: Arc<RequestInspector>, registry: Arc<Registry>) -> Router {
+    let state = Arc::new(InspectUiState { inspector, registry });
 
     Router::new()
         // Main inspect UI
@@ -39,6 +43,7 @@ pub fn create_inspect_router(inspector: Arc<RequestInspector>) -> Router {
         .route("/inspect/api/tunnels/:tunnel_id/requests", get(list_requests))
         .route("/inspect/api/tunnels/:tunnel_id/requests/:request_id", get(get_request))
         .route("/inspect/api/tunnels/:tunnel_id/requests", post(clear_requests))
+        .route("/inspect/api/tunnels/:tunnel_id/requests/:request_id/replay", post(replay_request))
         .route("/inspect/api/tunnels/:tunnel_id/stats", get(get_stats))
         
         // WebSocket for live updates
@@ -151,6 +156,201 @@ async fn clear_requests(
     Json(serde_json::json!({ "success": true })).into_response()
 }
 
+/// Replay a captured request
+async fn replay_request(
+    State(state): State<Arc<InspectUiState>>,
+    Path((tunnel_id, request_id)): Path<(String, u64)>,
+) -> impl IntoResponse {
+    let tunnel_id = match tunnel_id.parse::<TunnelId>() {
+        Ok(id) => id,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({
+                "error": "Invalid tunnel ID"
+            }))).into_response();
+        }
+    };
+
+    // Get the captured request
+    let request = match state.inspector.get_request(tunnel_id, request_id) {
+        Some(req) => req,
+        None => {
+            return (StatusCode::NOT_FOUND, Json(serde_json::json!({
+                "error": "Request not found"
+            }))).into_response();
+        }
+    };
+
+    // Check if tunnel is still connected
+    let agent_conn = match state.registry.get_tunnel_connection(&tunnel_id) {
+        Some(conn) => conn,
+        None => {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({
+                "error": "Tunnel not connected"
+            }))).into_response();
+        }
+    };
+
+    // Reconstruct the HTTP request
+    let mut http_request = format!(
+        "{} {} {}\r\n",
+        request.method,
+        request.path,
+        request.http_version
+    );
+
+    // Add headers
+    for (name, value) in &request.request_headers {
+        http_request.push_str(&format!("{}: {}\r\n", name, value));
+    }
+    http_request.push_str("\r\n");
+
+    // Add body if present
+    let request_bytes = if let Some(ref body) = request.request_body {
+        let mut bytes = http_request.into_bytes();
+        bytes.extend_from_slice(body.as_bytes());
+        bytes
+    } else {
+        http_request.into_bytes()
+    };
+
+    // Send through the tunnel
+    use nlag_common::protocol::{
+        codec::quic::{read_message, write_message},
+        message::{DataFrame, Message, StreamCloseMessage, StreamOpenMessage, StreamMetadata},
+    };
+    use nlag_common::types::StreamId;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    
+    static REPLAY_COUNTER: AtomicU64 = AtomicU64::new(0);
+    let stream_id = StreamId(REPLAY_COUNTER.fetch_add(1, Ordering::Relaxed) + 1_000_000);
+
+    // Open bidirectional stream to agent
+    let (mut send, mut recv) = match agent_conn.open_bi().await {
+        Ok(streams) => streams,
+        Err(e) => {
+            return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({
+                "error": format!("Failed to open stream: {}", e)
+            }))).into_response();
+        }
+    };
+
+    // Build metadata from original request
+    let host = request.request_headers
+        .iter()
+        .find(|(name, _)| name.to_lowercase() == "host")
+        .map(|(_, value)| value.clone());
+
+    let metadata = StreamMetadata {
+        host,
+        path: Some(request.path.clone()),
+        method: Some(request.method.clone()),
+        headers: request.request_headers.clone(),
+    };
+
+    // Send stream open
+    let open_msg = Message::StreamOpen(StreamOpenMessage {
+        tunnel_id,
+        stream_id,
+        source_addr: "replay:0".to_string(),
+        metadata: Some(metadata),
+    });
+
+    if let Err(e) = write_message(&mut send, &open_msg).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("Failed to send stream open: {}", e)
+        }))).into_response();
+    }
+
+    // Send request data
+    let data_msg = Message::Data(DataFrame {
+        tunnel_id,
+        stream_id,
+        payload: request_bytes,
+    });
+
+    if let Err(e) = write_message(&mut send, &data_msg).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("Failed to send data: {}", e)
+        }))).into_response();
+    }
+
+    // Send close to indicate end of request body
+    let close_msg = Message::StreamClose(StreamCloseMessage {
+        stream_id,
+        graceful: true,
+        error: None,
+    });
+
+    if let Err(e) = write_message(&mut send, &close_msg).await {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({
+            "error": format!("Failed to send close: {}", e)
+        }))).into_response();
+    }
+
+    // Read response with timeout
+    let mut response_data = Vec::new();
+    let mut response_status = None;
+
+    let read_timeout = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        async {
+            loop {
+                match read_message(&mut recv).await {
+                    Ok(Message::Data(frame)) => {
+                        // Extract status from first frame
+                        if response_status.is_none() {
+                            if let Ok(text) = std::str::from_utf8(&frame.payload) {
+                                if text.starts_with("HTTP/") {
+                                    if let Some(status_str) = text.split_whitespace().nth(1) {
+                                        response_status = status_str.parse::<u16>().ok();
+                                    }
+                                }
+                            }
+                        }
+                        response_data.extend_from_slice(&frame.payload);
+                    }
+                    Ok(Message::StreamClose(_)) => break,
+                    Ok(_) => continue,
+                    Err(_) => break,
+                }
+            }
+        }
+    ).await;
+
+    if read_timeout.is_err() {
+        return (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({
+            "error": "Replay request timed out"
+        }))).into_response();
+    }
+
+    // Parse response
+    let response_text = String::from_utf8_lossy(&response_data);
+    
+    // Find body separator
+    let body_start = response_text.find("\r\n\r\n")
+        .map(|pos| pos + 4)
+        .or_else(|| response_text.find("\n\n").map(|pos| pos + 2))
+        .unwrap_or(0);
+    
+    let headers_text = &response_text[..body_start.saturating_sub(if body_start >= 4 { 4 } else { 2 })];
+    let body_text = if body_start < response_data.len() {
+        String::from_utf8_lossy(&response_data[body_start..]).to_string()
+    } else {
+        String::new()
+    };
+
+    Json(serde_json::json!({
+        "success": true,
+        "original_request_id": request_id,
+        "response": {
+            "status": response_status.unwrap_or(0),
+            "headers": headers_text,
+            "body": body_text,
+            "body_size": body_text.len(),
+        }
+    })).into_response()
+}
+
 /// Get stats for a tunnel
 async fn get_stats(
     State(state): State<Arc<InspectUiState>>,
@@ -186,29 +386,69 @@ async fn websocket_handler(
         .into_response()
 }
 
-/// Handle WebSocket connection
+/// Handle WebSocket connection with heartbeat and efficient event batching
 async fn handle_websocket(socket: WebSocket, state: Arc<InspectUiState>, tunnel_id: TunnelId) {
     let (mut sender, mut receiver) = socket.split();
     
     // Subscribe to events
     let mut event_rx = state.inspector.subscribe();
     
-    // Send events to client
+    // Create shared sender for both heartbeat and events
+    let sender = Arc::new(tokio::sync::Mutex::new(sender));
+    let sender_for_events = sender.clone();
+    let sender_for_heartbeat = sender.clone();
+    
+    // Send initial state - existing requests for this tunnel
+    let initial_requests = state.inspector.list_requests(tunnel_id, 50, 0);
+    {
+        let mut sender_guard = sender.lock().await;
+        let initial_msg = serde_json::json!({
+            "type": "initial_state",
+            "requests": initial_requests,
+        });
+        if let Ok(json) = serde_json::to_string(&initial_msg) {
+            let _ = sender_guard.send(Message::Text(json)).await;
+        }
+    }
+    
+    // Event sending task - send immediately for real-time updates
     let send_task = tokio::spawn(async move {
-        while let Ok(event) = event_rx.recv().await {
-            // Filter events for this tunnel
-            let matches = match &event {
-                InspectorEvent::RequestStarted(req) => req.tunnel_id == tunnel_id,
-                InspectorEvent::RequestCompleted(req) => req.tunnel_id == tunnel_id,
-                InspectorEvent::RequestFailed(req) => req.tunnel_id == tunnel_id,
-                InspectorEvent::RequestsCleared(id) => *id == tunnel_id,
-            };
-            
-            if matches {
-                if let Ok(json) = serde_json::to_string(&event) {
-                    if sender.send(Message::Text(json)).await.is_err() {
-                        break;
+        loop {
+            match event_rx.recv().await {
+                Ok(event) => {
+                    // Filter events for this tunnel
+                    let matches = match &event {
+                        InspectorEvent::RequestStarted(req) => req.tunnel_id == tunnel_id,
+                        InspectorEvent::RequestCompleted(req) => req.tunnel_id == tunnel_id,
+                        InspectorEvent::RequestFailed(req) => req.tunnel_id == tunnel_id,
+                        InspectorEvent::RequestsCleared(id) => *id == tunnel_id,
+                    };
+                    
+                    if matches {
+                        // Send immediately for real-time updates
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            let mut sender_guard = sender_for_events.lock().await;
+                            if sender_guard.send(Message::Text(json)).await.is_err() {
+                                return;
+                            }
+                        }
                     }
+                }
+                Err(_) => break, // Channel closed
+            }
+        }
+    });
+    
+    // Heartbeat task - send ping every 30 seconds to keep connection alive
+    let heartbeat_task = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let mut sender_guard = sender_for_heartbeat.lock().await;
+            let ping_msg = serde_json::json!({"type": "ping", "timestamp": chrono::Utc::now().timestamp()});
+            if let Ok(json) = serde_json::to_string(&ping_msg) {
+                if sender_guard.send(Message::Text(json)).await.is_err() {
+                    break;
                 }
             }
         }
@@ -221,6 +461,14 @@ async fn handle_websocket(socket: WebSocket, state: Arc<InspectUiState>, tunnel_
                 Ok(Message::Ping(_data)) => {
                     // Pong is automatically sent by axum
                 }
+                Ok(Message::Text(text)) => {
+                    // Handle client messages (like pong responses)
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if json.get("type").and_then(|v| v.as_str()) == Some("pong") {
+                            // Client acknowledged heartbeat
+                        }
+                    }
+                }
                 Ok(Message::Close(_)) => break,
                 Err(_) => break,
                 _ => {}
@@ -228,10 +476,11 @@ async fn handle_websocket(socket: WebSocket, state: Arc<InspectUiState>, tunnel_
         }
     });
     
-    // Wait for either task to complete
+    // Wait for any task to complete (connection closed)
     tokio::select! {
         _ = send_task => {}
         _ = recv_task => {}
+        _ = heartbeat_task => {}
     }
 }
 
@@ -545,6 +794,8 @@ const INSPECT_TUNNEL_HTML: &str = r#"<!DOCTYPE html>
         }
         
         async function loadInitialRequests() {
+            // Initial requests are now sent via WebSocket on connect
+            // This is a fallback for manual refresh
             try {
                 const response = await fetch(`/inspect/api/tunnels/${tunnelId}/requests`);
                 const data = await response.json();
@@ -556,6 +807,23 @@ const INSPECT_TUNNEL_HTML: &str = r#"<!DOCTYPE html>
         }
         
         function handleEvent(event) {
+            // Handle initial state sent on WebSocket connect
+            if (event.type === 'initial_state') {
+                requests = event.requests || [];
+                renderRequestList();
+                return;
+            }
+            
+            // Handle ping/heartbeat
+            if (event.type === 'ping') {
+                // Send pong response
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+                }
+                return;
+            }
+            
+            // Handle inspector events
             if (event.RequestStarted) {
                 requests.unshift(event.RequestStarted);
                 renderRequestList();
@@ -641,7 +909,10 @@ const INSPECT_TUNNEL_HTML: &str = r#"<!DOCTYPE html>
                         <span class="request-method ${getMethodClass(req.method)}">${req.method}</span>
                         <span class="detail-path">${req.path}${req.query ? '?' + req.query : ''}</span>
                     </div>
-                    <div class="detail-meta">
+                    <div class="detail-actions">
+                        <button class="btn btn-sm btn-primary" onclick="replayRequest(${req.id})" title="Replay this request">
+                            🔄 Replay
+                        </button>
                         <span class="status-badge ${getStatusClass(req.response_status)}">${req.response_status || 'Pending'} ${req.response_status_text || ''}</span>
                         <span class="duration">${req.duration_ms ? req.duration_ms + 'ms' : ''}</span>
                     </div>
@@ -776,6 +1047,36 @@ const INSPECT_TUNNEL_HTML: &str = r#"<!DOCTYPE html>
                 await fetch(`/inspect/api/tunnels/${tunnelId}/requests`, { method: 'POST' });
             } catch (e) {
                 console.error('Failed to clear requests:', e);
+            }
+        }
+        
+        async function replayRequest(requestId) {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '⏳ Replaying...';
+            btn.disabled = true;
+            
+            try {
+                const response = await fetch(`/inspect/api/tunnels/${tunnelId}/requests/${requestId}/replay`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Show replay result in a modal or alert
+                    const replayInfo = `Replay completed!
+Status: ${data.response.status}
+Body size: ${data.response.body_size} bytes`;
+                    alert(replayInfo);
+                } else {
+                    alert('Replay failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch (e) {
+                console.error('Replay failed:', e);
+                alert('Failed to replay request: ' + e.message);
+            } finally {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
             }
         }
         

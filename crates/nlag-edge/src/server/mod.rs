@@ -171,7 +171,7 @@ pub async fn run_server(config: EdgeConfig) -> anyhow::Result<()> {
     // Start inspection UI if configured
     let inspect_handle = if let Some(inspect_addr) = config.inspect_listen_addr {
         info!("  Inspect UI: http://{}", inspect_addr);
-        let inspect_router = create_inspect_router(inspector.clone());
+        let inspect_router = create_inspect_router(inspector.clone(), registry.clone());
         let inspect_app = axum::Router::new()
             .merge(inspect_router)
             .route("/health", axum::routing::get(health_check))

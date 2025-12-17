@@ -161,15 +161,12 @@ async fn handle_public_connection(
                 // Look up tunnel
                 match registry.get_tunnel_by_subdomain(&subdomain) {
                     Some(tid) => {
-                        // Check for WebSocket upgrade
-                        let is_websocket = is_websocket_upgrade(&peek_buf[..n]);
-                        let mut headers = vec![];
+                        // Extract ALL HTTP headers for inspection
+                        let headers = extract_all_http_headers(&peek_buf[..n]);
                         
+                        // Check for WebSocket upgrade  
+                        let is_websocket = is_websocket_upgrade(&peek_buf[..n]);
                         if is_websocket {
-                            headers.push(("Upgrade".to_string(), "websocket".to_string()));
-                            if let Some(ws_key) = extract_websocket_key(&peek_buf[..n]) {
-                                headers.push(("Sec-WebSocket-Key".to_string(), ws_key));
-                            }
                             debug!("WebSocket upgrade request detected");
                         }
                         
@@ -298,6 +295,19 @@ async fn handle_public_connection(
     let bytes_out = Arc::new(AtomicU64::new(0));
     let response_status = Arc::new(AtomicU64::new(200)); // Default to 200
 
+    // Extract request body from the peeked data for inspection
+    let request_body = extract_request_body(&peek_buf[..n]);
+    if let Some(req_id) = inspect_request_id {
+        if !request_body.is_empty() {
+            inspector.set_request_body(tunnel_id, req_id, &request_body);
+        }
+    }
+
+    // Clone inspector and IDs for use in async blocks
+    let inspector_for_response = inspector.clone();
+    let tunnel_id_for_response = tunnel_id;
+    let request_id_for_response = inspect_request_id;
+
     // Client -> Agent
     let bytes_in_clone = bytes_in.clone();
     let client_to_agent = async move {
@@ -340,6 +350,9 @@ async fn handle_public_connection(
     let response_status_clone = response_status.clone();
     let agent_to_client = async move {
         let mut first_data = true;
+        let mut response_body_collector = Vec::new();
+        let mut headers_captured = false;
+
         loop {
             let msg = match read_message(&mut agent_recv).await {
                 Ok(msg) => msg,
@@ -353,12 +366,30 @@ async fn handle_public_connection(
                 Message::Data(frame) => {
                     bytes_out_clone.fetch_add(frame.payload.len() as u64, Ordering::Relaxed);
 
-                    // Extract HTTP status from first response
+                    // Extract HTTP status and headers from first response
                     if first_data {
                         first_data = false;
                         if let Some(status) = extract_http_status(&frame.payload) {
                             response_status_clone.store(status as u64, Ordering::Relaxed);
                         }
+                        
+                        // Capture response headers
+                        if !headers_captured {
+                            if let Some(req_id) = request_id_for_response {
+                                let response_headers = extract_response_headers(&frame.payload);
+                                inspector_for_response.set_response_headers(
+                                    tunnel_id_for_response,
+                                    req_id,
+                                    response_headers,
+                                );
+                            }
+                            headers_captured = true;
+                        }
+                    }
+
+                    // Collect response body (limit to first 1MB for memory safety)
+                    if response_body_collector.len() < 1024 * 1024 {
+                        response_body_collector.extend_from_slice(&frame.payload);
                     }
 
                     if let Err(e) = client_write.write_all(&frame.payload).await {
@@ -371,6 +402,17 @@ async fn handle_public_connection(
                 }
                 other => {
                     debug!("Unexpected message: {:?}", other.message_type());
+                }
+            }
+        }
+
+        // Set response body at the end
+        if let Some(req_id) = request_id_for_response {
+            if !response_body_collector.is_empty() {
+                // Extract just the body (after headers)
+                let body = extract_request_body(&response_body_collector);
+                if !body.is_empty() {
+                    inspector_for_response.set_response_body(tunnel_id_for_response, req_id, &body);
                 }
             }
         }
@@ -501,6 +543,89 @@ fn extract_http_status(data: &[u8]) -> Option<u16> {
         }
     }
     None
+}
+
+/// Extract ALL HTTP headers from request data
+fn extract_all_http_headers(data: &[u8]) -> Vec<(String, String)> {
+    let text = match std::str::from_utf8(data) {
+        Ok(t) => t,
+        Err(_) => return vec![],
+    };
+    
+    let mut headers = Vec::new();
+    let mut lines = text.lines();
+    
+    // Skip the request line (GET /path HTTP/1.1)
+    lines.next();
+    
+    // Parse headers until empty line
+    for line in lines {
+        // Empty line marks end of headers
+        if line.is_empty() {
+            break;
+        }
+        
+        // Parse "Header-Name: value"
+        if let Some(colon_pos) = line.find(':') {
+            let name = line[..colon_pos].trim().to_string();
+            let value = line[colon_pos + 1..].trim().to_string();
+            headers.push((name, value));
+        }
+    }
+    
+    headers
+}
+
+/// Extract HTTP response headers from response data
+fn extract_response_headers(data: &[u8]) -> Vec<(String, String)> {
+    let text = match std::str::from_utf8(data) {
+        Ok(t) => t,
+        Err(_) => return vec![],
+    };
+    
+    let mut headers = Vec::new();
+    let mut lines = text.lines();
+    
+    // Skip the status line (HTTP/1.1 200 OK)
+    lines.next();
+    
+    // Parse headers until empty line
+    for line in lines {
+        if line.is_empty() {
+            break;
+        }
+        
+        if let Some(colon_pos) = line.find(':') {
+            let name = line[..colon_pos].trim().to_string();
+            let value = line[colon_pos + 1..].trim().to_string();
+            headers.push((name, value));
+        }
+    }
+    
+    headers
+}
+
+/// Extract HTTP request body from data (after headers)
+fn extract_request_body(data: &[u8]) -> Vec<u8> {
+    let text = match std::str::from_utf8(data) {
+        Ok(t) => t,
+        Err(_) => return vec![],
+    };
+    
+    // Find the double CRLF that separates headers from body
+    if let Some(pos) = text.find("\r\n\r\n") {
+        let body_start = pos + 4;
+        if body_start < data.len() {
+            return data[body_start..].to_vec();
+        }
+    } else if let Some(pos) = text.find("\n\n") {
+        let body_start = pos + 2;
+        if body_start < data.len() {
+            return data[body_start..].to_vec();
+        }
+    }
+    
+    vec![]
 }
 
 /// Check if the request is a WebSocket upgrade request

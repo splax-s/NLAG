@@ -13,7 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -103,22 +103,29 @@ pub async fn run_ui(
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     // Initialize app state
     let mut app = AppState::new(local_addr, edge_addr);
 
-    // Main loop
-    let tick_rate = Duration::from_millis(100);
-    
+    // Main loop - prioritize data events over keyboard
     loop {
+        // Process ALL pending UI events first (non-blocking) - this is the priority
+        let mut had_events = false;
+        while let Ok(event) = event_rx.try_recv() {
+            app.handle_event(event);
+            had_events = true;
+        }
+        
+        // Only redraw if we had events or it's time for a refresh
         // Draw UI
         terminal.draw(|f| draw_ui(f, &app))?;
 
-        // Handle events with timeout
-        if crossterm::event::poll(tick_rate)? {
+        // Check for keyboard input with very short timeout (1ms)
+        // This makes the loop responsive to both keyboard and data events
+        if crossterm::event::poll(Duration::from_millis(1))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
@@ -134,10 +141,10 @@ pub async fn run_ui(
                 }
             }
         }
-
-        // Process UI events (non-blocking)
-        while let Ok(event) = event_rx.try_recv() {
-            app.handle_event(event);
+        
+        // Small sleep to prevent CPU spinning when idle
+        if !had_events {
+            tokio::time::sleep(Duration::from_millis(8)).await;
         }
     }
 
@@ -145,8 +152,7 @@ pub async fn run_ui(
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
+        LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
 
