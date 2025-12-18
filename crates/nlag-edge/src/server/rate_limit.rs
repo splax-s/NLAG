@@ -16,6 +16,7 @@ use crate::config::RateLimitConfig;
 
 /// Rate limiter for public traffic
 #[derive(Clone)]
+#[allow(clippy::type_complexity)]
 pub struct RateLimiter {
     /// Global rate limiter
     global: Arc<GovRateLimiter<NotKeyed, InMemoryState, DefaultClock>>,

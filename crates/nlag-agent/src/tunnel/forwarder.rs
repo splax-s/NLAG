@@ -59,7 +59,6 @@ pub async fn forward_loop(
 
         let local_addr = local_addr.clone();
         let stats = stats.clone();
-        let tunnel_id = tunnel_id;
 
         // Spawn task to handle this stream
         tokio::spawn(async move {
@@ -96,7 +95,6 @@ pub async fn forward_loop_with_ui(
         let local_addr = local_addr.clone();
         let stats = stats.clone();
         let ui_handle = ui_handle.clone();
-        let tunnel_id = tunnel_id;
 
         tokio::spawn(async move {
             if let Err(e) = handle_stream_with_ui(send, recv, tunnel_id, &local_addr, stats, ui_handle).await {
@@ -141,7 +139,7 @@ async fn handle_stream_with_ui(
                 m.path.clone().unwrap_or_else(|| "/".to_string()),
             )
         })
-        .unwrap_or_else(|| ("TCP".to_string(), format!(":{}", local_addr.split(':').last().unwrap_or("0"))));
+        .unwrap_or_else(|| ("TCP".to_string(), format!(":{}", local_addr.split(':').next_back().unwrap_or("0"))));
 
     // Create initial request entry (status 0 = in progress)
     let mut request = HttpRequest::new(&method, &path);
@@ -185,7 +183,7 @@ async fn handle_stream_with_ui(
                     if frame.stream_id != stream_id {
                         continue;
                     }
-                    if let Err(_) = local_write.write_all(&frame.payload).await {
+                    if (local_write.write_all(&frame.payload).await).is_err() {
                         break;
                     }
                     total_bytes += frame.payload.len() as u64;
@@ -226,7 +224,7 @@ async fn handle_stream_with_ui(
                 payload: buf[..n].to_vec(),
             });
 
-            if let Err(_) = write_message(&mut quic_send, &frame).await {
+            if write_message(&mut quic_send, &frame).await.is_err() {
                 break;
             }
 

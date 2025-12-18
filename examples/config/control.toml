@@ -1,0 +1,137 @@
+# NLAG Control Plane Configuration
+# Location: /etc/nlag/control.toml
+
+# ============================================
+# Server Settings
+# ============================================
+
+# API server listen address
+api_listen_addr = "0.0.0.0:3000"
+
+# Dashboard web UI listen address
+dashboard_listen_addr = "0.0.0.0:3001"
+
+# gRPC API listen address (for edge servers)
+grpc_listen_addr = "0.0.0.0:50051"
+
+# ============================================
+# Database
+# ============================================
+[database]
+# Database type: sqlite, postgres, mysql
+type = "postgres"
+
+# Connection string
+url = "postgres://nlag:password@localhost:5432/nlag"
+
+# Connection pool size
+max_connections = 20
+
+# Connection timeout (seconds)
+connect_timeout_secs = 30
+
+# ============================================
+# Authentication
+# ============================================
+[auth]
+# JWT signing algorithm
+algorithm = "RS256"
+
+# Private key for signing tokens (RS* algorithms)
+jwt_private_key = "/etc/nlag/jwt-private.pem"
+
+# Public key for verifying tokens
+jwt_public_key = "/etc/nlag/jwt-public.pem"
+
+# Access token expiry (seconds)
+access_token_expiry_secs = 3600  # 1 hour
+
+# Refresh token expiry (seconds)
+refresh_token_expiry_secs = 604800  # 7 days
+
+# Agent token expiry (seconds)
+agent_token_expiry_secs = 86400  # 24 hours
+
+# ============================================
+# OAuth2 Providers (optional)
+# ============================================
+[oauth.github]
+enabled = true
+client_id = "your-github-client-id"
+client_secret = "your-github-client-secret"
+redirect_uri = "https://dashboard.example.com/auth/github/callback"
+
+[oauth.google]
+enabled = false
+# client_id = "your-google-client-id"
+# client_secret = "your-google-client-secret"
+# redirect_uri = "https://dashboard.example.com/auth/google/callback"
+
+# ============================================
+# API Keys
+# ============================================
+[api_keys]
+# Enable API key authentication
+enabled = true
+
+# API key prefix
+prefix = "nlag_"
+
+# Default rate limit per API key (requests/minute)
+default_rate_limit = 1000
+
+# ============================================
+# Billing (optional)
+# ============================================
+[billing]
+# Enable billing integration
+enabled = false
+
+# Stripe API key
+# stripe_secret_key = "sk_live_..."
+
+# Stripe webhook secret
+# stripe_webhook_secret = "whsec_..."
+
+# Free tier limits
+free_tier_tunnels = 3
+free_tier_bandwidth_gb = 1
+
+# ============================================
+# Email (optional)
+# ============================================
+[email]
+# Enable email notifications
+enabled = false
+
+# SMTP settings
+# smtp_host = "smtp.example.com"
+# smtp_port = 587
+# smtp_user = "nlag@example.com"
+# smtp_password = "..."
+# from_address = "nlag@example.com"
+
+# ============================================
+# Logging
+# ============================================
+[logging]
+level = "info"
+format = "json"
+
+# ============================================
+# Security
+# ============================================
+[security]
+# CORS allowed origins
+cors_origins = ["https://dashboard.example.com"]
+
+# CSRF protection
+csrf_enabled = true
+
+# Session cookie settings
+cookie_secure = true
+cookie_http_only = true
+cookie_same_site = "strict"
+
+# Rate limiting for auth endpoints
+auth_rate_limit = 10  # requests per minute per IP

@@ -37,6 +37,7 @@ fn default_edge_addr() -> String {
 
 /// TLS-specific settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct TlsSettings {
     /// Skip TLS verification (DANGEROUS - dev only)
     #[serde(default)]
@@ -52,16 +53,6 @@ pub struct TlsSettings {
     pub client_key: Option<String>,
 }
 
-impl Default for TlsSettings {
-    fn default() -> Self {
-        Self {
-            insecure_skip_verify: false,
-            ca_cert: None,
-            client_cert: None,
-            client_key: None,
-        }
-    }
-}
 
 /// Connection behavior settings
 #[derive(Debug, Clone, Serialize, Deserialize)]

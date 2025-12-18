@@ -47,7 +47,7 @@ async fn main() -> ExitCode {
     match run(cli).await {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            if !std::env::var("NLAG_TUI_ACTIVE").is_ok() {
+            if std::env::var("NLAG_TUI_ACTIVE").is_err() {
                 eprintln!("Error: {:#}", e);
             }
             ExitCode::FAILURE

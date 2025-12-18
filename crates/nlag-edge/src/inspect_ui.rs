@@ -411,28 +411,23 @@ async fn handle_websocket(socket: WebSocket, state: Arc<InspectUiState>, tunnel_
     
     // Event sending task - send immediately for real-time updates
     let send_task = tokio::spawn(async move {
-        loop {
-            match event_rx.recv().await {
-                Ok(event) => {
-                    // Filter events for this tunnel
-                    let matches = match &event {
-                        InspectorEvent::RequestStarted(req) => req.tunnel_id == tunnel_id,
-                        InspectorEvent::RequestCompleted(req) => req.tunnel_id == tunnel_id,
-                        InspectorEvent::RequestFailed(req) => req.tunnel_id == tunnel_id,
-                        InspectorEvent::RequestsCleared(id) => *id == tunnel_id,
-                    };
-                    
-                    if matches {
-                        // Send immediately for real-time updates
-                        if let Ok(json) = serde_json::to_string(&event) {
-                            let mut sender_guard = sender_for_events.lock().await;
-                            if sender_guard.send(Message::Text(json)).await.is_err() {
-                                return;
-                            }
-                        }
+        while let Ok(event) = event_rx.recv().await {
+            // Filter events for this tunnel
+            let matches = match &event {
+                InspectorEvent::RequestStarted(req) => req.tunnel_id == tunnel_id,
+                InspectorEvent::RequestCompleted(req) => req.tunnel_id == tunnel_id,
+                InspectorEvent::RequestFailed(req) => req.tunnel_id == tunnel_id,
+                InspectorEvent::RequestsCleared(id) => *id == tunnel_id,
+            };
+            
+            if matches {
+                // Send immediately for real-time updates
+                if let Ok(json) = serde_json::to_string(&event) {
+                    let mut sender_guard = sender_for_events.lock().await;
+                    if sender_guard.send(Message::Text(json)).await.is_err() {
+                        return;
                     }
                 }
-                Err(_) => break, // Channel closed
             }
         }
     });

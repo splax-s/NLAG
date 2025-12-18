@@ -22,6 +22,7 @@ pub const NLAG_ALPN: &[u8] = b"nlag/1";
 
 /// TLS configuration holder
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct TlsConfig {
     /// Server name for SNI (client only)
     pub server_name: Option<String>,
@@ -35,17 +36,6 @@ pub struct TlsConfig {
     pub insecure_skip_verify: bool,
 }
 
-impl Default for TlsConfig {
-    fn default() -> Self {
-        Self {
-            server_name: None,
-            ca_cert_path: None,
-            cert_path: None,
-            key_path: None,
-            insecure_skip_verify: false,
-        }
-    }
-}
 
 /// Create a TLS client configuration
 ///

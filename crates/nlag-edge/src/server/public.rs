@@ -124,6 +124,7 @@ impl PublicListener {
 }
 
 /// Handle a single public connection
+#[allow(clippy::too_many_arguments)]
 async fn handle_public_connection(
     mut stream: TcpStream,
     source_addr: SocketAddr,
@@ -570,8 +571,7 @@ fn extract_subdomain(host: &str, base_domain: &str) -> Option<String> {
     }
 
     // Check if host ends with base domain
-    if host.ends_with(base_domain) {
-        let prefix = &host[..host.len() - base_domain.len()];
+    if let Some(prefix) = host.strip_suffix(base_domain) {
         let prefix = prefix.trim_end_matches('.');
         if !prefix.is_empty() {
             return Some(prefix.to_string());
@@ -579,8 +579,7 @@ fn extract_subdomain(host: &str, base_domain: &str) -> Option<String> {
     }
 
     // Also support subdomain.localhost pattern for development
-    if host.ends_with(".localhost") {
-        let subdomain = &host[..host.len() - ".localhost".len()];
+    if let Some(subdomain) = host.strip_suffix(".localhost") {
         if !subdomain.is_empty() {
             return Some(subdomain.to_string());
         }
@@ -728,6 +727,7 @@ fn is_websocket_upgrade(data: &[u8]) -> bool {
 }
 
 /// Extract WebSocket key from request (for logging/debugging)
+#[allow(dead_code)]
 fn extract_websocket_key(data: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(data).ok()?;
     for line in text.lines() {

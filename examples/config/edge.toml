@@ -1,0 +1,236 @@
+# NLAG Edge Server Configuration
+# Location: /etc/nlag/edge.toml
+
+# ============================================
+# Network Bindings
+# ============================================
+
+# QUIC listener for agent connections
+agent_listen_addr = "0.0.0.0:4443"
+
+# HTTP listener for public traffic
+public_listen_addr = "0.0.0.0:8080"
+
+# Metrics endpoint (Prometheus)
+metrics_listen_addr = "0.0.0.0:9090"
+
+# Request inspection UI
+inspect_listen_addr = "0.0.0.0:4040"
+
+# ============================================
+# TLS Configuration
+# ============================================
+[tls]
+# Path to TLS certificate (PEM format)
+cert_path = "/etc/nlag/certs/edge.crt"
+
+# Path to TLS private key (PEM format)
+key_path = "/etc/nlag/certs/edge.key"
+
+# Minimum TLS version (1.2 or 1.3)
+min_version = "1.3"
+
+# ALPN protocols to advertise
+alpn = ["h2", "http/1.1"]
+
+# ============================================
+# Domain Configuration
+# ============================================
+[domain]
+# Base domain for subdomain routing
+# Tunnels will be accessible at: {subdomain}.{base_domain}
+base_domain = "tunnels.example.com"
+
+# URL scheme for generated tunnel URLs
+scheme = "https"
+
+# Reserved subdomains that cannot be claimed
+reserved = ["www", "api", "admin", "dashboard", "app", "mail"]
+
+# ============================================
+# Rate Limiting
+# ============================================
+[rate_limit]
+# Global requests per second limit
+requests_per_second = 1000
+
+# Burst size (token bucket)
+burst_size = 100
+
+# Maximum concurrent connections per tunnel
+max_connections_per_tunnel = 100
+
+# Per-IP rate limit
+per_ip_requests_per_second = 50
+per_ip_burst_size = 20
+
+# ============================================
+# Authentication
+# ============================================
+[auth]
+# Enable JWT authentication
+enabled = true
+
+# JWT algorithm: RS256, RS384, RS512, HS256, HS384, HS512
+algorithm = "RS256"
+
+# Public key for RS* algorithms
+jwt_public_key = "/etc/nlag/jwt-public.pem"
+
+# Secret for HS* algorithms (use one or the other, not both)
+# jwt_secret = "your-secret-key"
+
+# Token expiry grace period (seconds)
+expiry_grace_secs = 60
+
+# ============================================
+# Request Inspection
+# ============================================
+[inspect]
+# Enable request inspection
+enabled = true
+
+# Maximum body size to capture (bytes)
+max_body_size = 1048576  # 1MB
+
+# Maximum requests to keep per tunnel
+max_requests_per_tunnel = 500
+
+# Request retention period (seconds)
+retention_secs = 3600  # 1 hour
+
+# Capture request headers
+capture_headers = true
+
+# Capture request bodies
+capture_body = true
+
+# ============================================
+# Warning Page
+# ============================================
+[warning]
+# Enable security warning page for first-time browser visits
+enabled = true
+
+# Warning page title
+title = "Security Warning"
+
+# Warning message displayed to users
+message = "You are about to access a development tunnel. This connection goes directly to a developer's machine. Only proceed if you trust the source of this link."
+
+# Hosts that bypass the warning page
+bypass_hosts = []
+
+# User agents that bypass the warning page (for API clients)
+bypass_user_agents = ["curl", "wget", "httpie", "postman"]
+
+# Warning acknowledgment duration (seconds)
+ack_duration_secs = 86400  # 24 hours
+
+# ============================================
+# Load Balancing
+# ============================================
+[load_balancer]
+# Strategy: round_robin, least_connections, random, ip_hash, weighted
+strategy = "round_robin"
+
+# Health check interval (seconds)
+health_check_interval_secs = 30
+
+# Number of failures before marking unhealthy
+unhealthy_threshold = 3
+
+# Number of successes before marking healthy
+healthy_threshold = 2
+
+# Health check timeout (seconds)
+health_check_timeout_secs = 5
+
+# ============================================
+# Connection Pooling
+# ============================================
+[pool]
+# Maximum idle connections per agent
+max_idle_connections = 10
+
+# Idle connection timeout (seconds)
+idle_timeout_secs = 60
+
+# Maximum connection age (seconds, 0 = no limit)
+max_age_secs = 0
+
+# ============================================
+# Logging
+# ============================================
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log format: json, pretty
+format = "json"
+
+# Access log file (optional)
+# access_log = "/var/log/nlag/access.log"
+
+# Error log file (optional)
+# error_log = "/var/log/nlag/error.log"
+
+# ============================================
+# Audit Logging
+# ============================================
+[audit]
+# Enable audit logging
+enabled = true
+
+# Audit log destination: file, syslog, webhook
+destination = "file"
+
+# Audit log file path
+file_path = "/var/log/nlag/audit.log"
+
+# Events to audit
+events = ["auth", "tunnel_open", "tunnel_close", "rate_limit", "error"]
+
+# ============================================
+# Multi-Region
+# ============================================
+[region]
+# This edge server's region ID
+id = "us-east-1"
+
+# Region display name
+name = "US East (N. Virginia)"
+
+# Region priority (lower = higher priority)
+priority = 1
+
+# Other edge servers for failover
+# peers = ["edge-us-west.example.com:4443", "edge-eu.example.com:4443"]
+
+# ============================================
+# TCP Tunneling
+# ============================================
+[tcp]
+# Port range for TCP tunnels
+port_range_start = 10000
+port_range_end = 20000
+
+# Reserved ports that cannot be assigned
+reserved_ports = [22, 80, 443, 3306, 5432, 6379, 27017]
+
+# ============================================
+# UDP Tunneling
+# ============================================
+[udp]
+# Enable UDP tunneling
+enabled = true
+
+# Port range for UDP tunnels
+port_range_start = 20000
+port_range_end = 30000
+
+# Maximum packet size (bytes)
+max_packet_size = 65535
+
+# Session timeout (seconds)
+session_timeout_secs = 60

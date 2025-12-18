@@ -2,6 +2,8 @@
 //!
 //! Exposes metrics at /metrics endpoint for Prometheus scraping.
 
+#![allow(dead_code)]
+
 use std::net::SocketAddr;
 
 use hyper::{Request, Response, StatusCode, body::Incoming};

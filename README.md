@@ -348,11 +348,56 @@ NLAG uses a binary framed protocol over QUIC streams:
 
 ## Planned Features
 
-- [ ] Let's Encrypt automatic TLS provisioning (ACME)
-- [ ] mTLS support for agent authentication
-- [ ] Short-lived certificates
-- [ ] API key management UI
-- [ ] Billing integration
+### High Priority
+
+- [ ] **ACME/Let's Encrypt** - Automatic TLS certificate provisioning
+- [ ] **Traffic Policy Engine** - YAML/JSON rules for routing, auth, transformations
+- [ ] **OAuth/OIDC Integration** - Google, GitHub, Azure AD authentication
+- [ ] **IP Allowlist/Blocklist** - Restrict access by IP/CIDR
+- [ ] **Webhook Verification** - Validate webhooks from Stripe, GitHub, Slack, etc.
+
+### Medium Priority
+
+- [ ] **Request/Response Transformation** - Add/remove/modify headers
+- [ ] **URL Rewriting** - Path-based routing and rewrites
+- [ ] **Basic Auth** - Simple username/password protection
+- [ ] **Endpoint Pooling** - Multiple agents serving same subdomain with failover
+- [ ] **File Server Mode** - Serve static files directly (`nlag expose file:///path`)
+- [ ] **Circuit Breaker** - Automatic failure detection and recovery
+
+### ngrok-Inspired Features
+
+- [ ] **Reserved Domains** - Persistent subdomains across sessions
+- [ ] **Wildcard Domains** - Route `*.example.com` to tunnels
+- [ ] **Custom Error Pages** - Branded error responses
+- [ ] **Request Replay from UI** - One-click replay in inspect interface
+- [ ] **Event Webhooks** - Send tunnel events to external services
+- [ ] **SSH Reverse Tunnel** - Create tunnels via SSH
+- [ ] **Agent Config File** - Start multiple tunnels from YAML config
+- [ ] **Traffic Policy Actions**:
+  - `rate-limit` - Per-path rate limiting
+  - `redirect` - URL redirects
+  - `custom-response` - Return static responses
+  - `compress` - Gzip/Brotli compression
+  - `cache` - Response caching
+  - `timeout` - Custom timeouts per route
+
+### Enterprise Features
+
+- [ ] **SSO Integration** - SAML 2.0 support
+- [ ] **Audit Log Export** - Ship to SIEM (Splunk, Datadog, etc.)
+- [ ] **Usage Analytics Dashboard** - Traffic insights and trends
+- [ ] **Team Management** - Role-based access control
+- [ ] **SLA Monitoring** - Uptime and latency tracking
+- [ ] **Geo-Restriction** - Block/allow by country
+
+### Developer Experience
+
+- [ ] **Agent SDKs** - Rust, Go, Python, Node.js libraries
+- [ ] **Kubernetes Operator** - Native K8s CRD integration
+- [ ] **VS Code Extension** - Start tunnels from IDE
+- [ ] **Terraform Provider** - Infrastructure as code support
+- [ ] **CLI Completions** - Shell autocomplete for bash/zsh/fish
 
 ## Development
 

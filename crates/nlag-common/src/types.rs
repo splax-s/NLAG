@@ -381,11 +381,72 @@ mod tests {
     }
 
     #[test]
+    fn test_agent_id_display() {
+        let id = AgentId::new();
+        let s = id.to_string();
+        assert!(!s.is_empty());
+        assert!(s.len() == 36); // UUID format
+    }
+
+    #[test]
+    fn test_tunnel_id_from_str() {
+        let id = TunnelId::new();
+        let s = id.to_string();
+        let parsed: TunnelId = s.parse().unwrap();
+        assert_eq!(id, parsed);
+    }
+
+    #[test]
+    fn test_tunnel_id_invalid() {
+        let result: Result<TunnelId, _> = "not-a-uuid".parse();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_stream_id_display() {
+        let id = StreamId(12345);
+        assert_eq!(id.to_string(), "12345");
+    }
+
+    #[test]
     fn test_protocol_parsing() {
         assert_eq!("tcp".parse::<Protocol>().unwrap(), Protocol::Tcp);
         assert_eq!("HTTP".parse::<Protocol>().unwrap(), Protocol::Http);
         assert_eq!("h2".parse::<Protocol>().unwrap(), Protocol::Http2);
         assert!("invalid".parse::<Protocol>().is_err());
+    }
+
+    #[test]
+    fn test_protocol_display() {
+        assert_eq!(Protocol::Tcp.to_string(), "tcp");
+        assert_eq!(Protocol::Http.to_string(), "http");
+        assert_eq!(Protocol::Https.to_string(), "https");
+        assert_eq!(Protocol::Grpc.to_string(), "grpc");
+        assert_eq!(Protocol::Udp.to_string(), "udp");
+    }
+
+    #[test]
+    fn test_protocol_tls_termination() {
+        assert!(!Protocol::Tcp.requires_tls_termination());
+        assert!(!Protocol::Http.requires_tls_termination());
+        assert!(Protocol::Https.requires_tls_termination());
+        assert!(Protocol::Http2.requires_tls_termination());
+        assert!(Protocol::Grpc.requires_tls_termination());
+    }
+
+    #[test]
+    fn test_protocol_default_ports() {
+        assert_eq!(Protocol::Http.default_port(), 80);
+        assert_eq!(Protocol::Https.default_port(), 443);
+        assert_eq!(Protocol::Grpc.default_port(), 443);
+        assert_eq!(Protocol::Tcp.default_port(), 0);
+    }
+
+    #[test]
+    fn test_protocol_is_udp() {
+        assert!(Protocol::Udp.is_udp());
+        assert!(!Protocol::Tcp.is_udp());
+        assert!(!Protocol::Http.is_udp());
     }
 
     #[test]
@@ -396,5 +457,37 @@ mod tests {
 
         assert_eq!(config.local_addr(), "localhost:8080");
         assert_eq!(config.subdomain, Some("myapp".to_string()));
+    }
+
+    #[test]
+    fn test_tunnel_config_defaults() {
+        let config = TunnelConfig::new(Protocol::Tcp, 3000);
+        assert_eq!(config.local_host, "127.0.0.1");
+        assert_eq!(config.local_port, 3000);
+        assert_eq!(config.protocol, Protocol::Tcp);
+        assert_eq!(config.subdomain, None);
+    }
+
+    #[test]
+    fn test_tunnel_state_display() {
+        assert_eq!(TunnelState::Active.to_string(), "active");
+        assert_eq!(TunnelState::Connecting.to_string(), "connecting");
+        assert_eq!(TunnelState::Closed.to_string(), "closed");
+        assert_eq!(TunnelState::Error.to_string(), "error");
+    }
+
+    #[test]
+    fn test_tunnel_status() {
+        let status = TunnelStatus {
+            tunnel_id: TunnelId::new(),
+            state: TunnelState::Active,
+            public_url: Some("https://test.example.com".to_string()),
+            active_connections: 5,
+            bytes_in: 1024,
+            bytes_out: 2048,
+            created_at: chrono::Utc::now(),
+        };
+        assert!(status.public_url.is_some());
+        assert_eq!(status.active_connections, 5);
     }
 }

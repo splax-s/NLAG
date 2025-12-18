@@ -3,6 +3,8 @@
 //! This module maintains the state of connected agents and their tunnels,
 //! enabling routing of incoming traffic to the correct agent.
 
+#![allow(dead_code)]
+
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -27,7 +29,7 @@ pub struct Registry {
     /// Tunnels by ID
     tunnels: DashMap<TunnelId, TunnelEntry>,
 
-    /// Subdomain -> Vec<TunnelId> mapping for routing (supports multiple tunnels per subdomain)
+    /// Subdomain to `Vec<TunnelId>` mapping for routing (supports multiple tunnels per subdomain)
     subdomain_map: DashMap<String, Vec<TunnelId>>,
 
     /// Load balancer for distributing traffic
@@ -229,7 +231,7 @@ impl Registry {
         // Add to subdomain map (supports multiple tunnels per subdomain)
         self.subdomain_map
             .entry(subdomain.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(tunnel_id);
 
         // Add to load balancer

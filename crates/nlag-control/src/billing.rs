@@ -42,8 +42,10 @@ pub type Result<T> = std::result::Result<T, BillingError>;
 /// Subscription tiers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum SubscriptionTier {
     /// Free tier with limited features
+    #[default]
     Free,
     /// Pro tier for individual developers
     Pro,
@@ -55,11 +57,6 @@ pub enum SubscriptionTier {
     Enterprise,
 }
 
-impl Default for SubscriptionTier {
-    fn default() -> Self {
-        Self::Free
-    }
-}
 
 impl SubscriptionTier {
     /// Get tier limits

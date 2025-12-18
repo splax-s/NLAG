@@ -3,6 +3,8 @@
 //! Handles raw TCP connections routed by port number.
 //! Each TCP tunnel gets an assigned port on the edge server.
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -81,8 +83,8 @@ impl TcpTunnelManager {
         for offset in 0..range_size {
             let port = self.config.port_range_start + ((start - self.config.port_range_start + offset) % range_size);
             
-            if !port_map.contains_key(&port) {
-                port_map.insert(port, tunnel_id);
+            if let std::collections::hash_map::Entry::Vacant(e) = port_map.entry(port) {
+                e.insert(tunnel_id);
                 self.next_port.store((port + 1) as u64, Ordering::Relaxed);
                 return Some(port);
             }

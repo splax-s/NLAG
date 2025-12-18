@@ -70,7 +70,7 @@ pub enum Commands {
     /// Expose multiple local services through a single tunnel connection
     #[command(alias = "m")]
     Multi {
-        /// Services to expose in format: protocol:local_port[:subdomain]
+        /// Services to expose in format: `protocol:local_port[:subdomain]`
         /// Example: http:8080:web tcp:5432:db
         #[arg(required = true, num_args = 1..)]
         services: Vec<String>,
@@ -125,7 +125,7 @@ pub struct ServiceSpec {
 
 impl ServiceSpec {
     /// Parse a service specification string
-    /// Format: protocol:port[:subdomain]
+    /// Format: `protocol:port[:subdomain]`
     pub fn parse(s: &str) -> Result<Self, String> {
         let parts: Vec<&str> = s.split(':').collect();
         

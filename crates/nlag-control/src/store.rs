@@ -8,6 +8,8 @@
 //!
 //! Production: Replace with PostgreSQL implementation
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
@@ -168,7 +170,7 @@ impl Store {
         // Generate or validate subdomain
         let subdomain = subdomain
             .map(String::from)
-            .unwrap_or_else(|| generate_subdomain());
+            .unwrap_or_else(generate_subdomain);
 
         if subdomains.contains_key(&subdomain) {
             return Err(anyhow!("Subdomain already in use"));

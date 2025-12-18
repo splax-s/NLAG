@@ -1,28 +1,11 @@
 # Clippy configuration
-# Be strict but not pedantic
+# Settings for code quality
 
-[workspace]
-# Warn on common issues
-warn = [
-    "clippy::all",
-    "clippy::pedantic",
-]
+# Maximum lines in a function before warning
+too-many-lines-threshold = 200
 
-# Allow some pedantic lints that are too noisy
-allow = [
-    "clippy::module_name_repetitions",
-    "clippy::must_use_candidate",
-    "clippy::missing_errors_doc",
-    "clippy::missing_panics_doc",
-    "clippy::doc_markdown",
-    "clippy::similar_names",
-]
+# Maximum cognitive complexity
+cognitive-complexity-threshold = 30
 
-# Deny dangerous patterns
-deny = [
-    "clippy::unwrap_used",
-    "clippy::expect_used",
-    "clippy::panic",
-    "clippy::todo",
-    "clippy::unimplemented",
-]
+# Allow some common patterns
+avoid-breaking-exported-api = true

@@ -17,8 +17,10 @@ use nlag_common::types::{AgentId, TunnelId};
 
 /// Load balancing strategy
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum LoadBalanceStrategy {
     /// Round-robin distribution
+    #[default]
     RoundRobin,
 
     /// Least connections
@@ -37,11 +39,6 @@ pub enum LoadBalanceStrategy {
     ResponseTime,
 }
 
-impl Default for LoadBalanceStrategy {
-    fn default() -> Self {
-        Self::RoundRobin
-    }
-}
 
 /// Configuration for load balancing
 #[derive(Debug, Clone)]
@@ -319,8 +316,8 @@ impl BackendGroup {
             backend.consecutive_failures += 1;
             backend.consecutive_successes = 0;
 
-            if backend.consecutive_failures >= self.config.unhealthy_threshold {
-                if backend.healthy {
+            if backend.consecutive_failures >= self.config.unhealthy_threshold
+                && backend.healthy {
                     backend.healthy = false;
                     warn!(
                         subdomain = %self.subdomain,
@@ -328,7 +325,6 @@ impl BackendGroup {
                         "Backend marked unhealthy"
                     );
                 }
-            }
         }
     }
 
@@ -340,8 +336,8 @@ impl BackendGroup {
             backend.consecutive_failures = 0;
             backend.last_health_check = Some(Instant::now());
 
-            if backend.consecutive_successes >= self.config.healthy_threshold {
-                if !backend.healthy {
+            if backend.consecutive_successes >= self.config.healthy_threshold
+                && !backend.healthy {
                     backend.healthy = true;
                     info!(
                         subdomain = %self.subdomain,
@@ -349,7 +345,6 @@ impl BackendGroup {
                         "Backend marked healthy"
                     );
                 }
-            }
         }
     }
 

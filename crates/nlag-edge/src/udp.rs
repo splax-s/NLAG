@@ -3,6 +3,8 @@
 //! This module provides support for tunneling UDP traffic through the edge server.
 //! UDP packets are encapsulated and transmitted over the QUIC connection.
 
+#![allow(dead_code)]
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -86,7 +88,8 @@ impl UdpPacket {
     }
     
     /// Encode packet for transmission over QUIC
-    /// Format: [session_id:8][source_type:1][source:4|16][source_port:2][dest_port:2][length:2][data:length]
+    /// 
+    /// Format: `[session_id:8][source_type:1][source:4|16][source_port:2][dest_port:2][length:2][data:length]`
     pub fn encode(&self) -> Bytes {
         let mut buf = BytesMut::with_capacity(32 + self.data.len());
         

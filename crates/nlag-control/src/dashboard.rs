@@ -88,7 +88,7 @@ async fn tunnels_page(State(_state): State<Arc<ApiState>>) -> impl IntoResponse 
 /// Get dashboard data as JSON
 async fn dashboard_data(State(state): State<Arc<ApiState>>) -> impl IntoResponse {
     // Get stats from store
-    let stats = state.store.get_stats().await.unwrap_or_else(|_| crate::api::StatsResponse {
+    let stats = state.store.get_stats().await.unwrap_or(crate::api::StatsResponse {
         total_users: 0,
         total_agents: 0,
         total_tunnels: 0,

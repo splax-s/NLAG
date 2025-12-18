@@ -137,8 +137,10 @@ impl AuditEventType {
 /// Severity levels for audit events
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AuditSeverity {
     Debug = 0,
+    #[default]
     Info = 1,
     Notice = 2,
     Warning = 3,
@@ -146,11 +148,6 @@ pub enum AuditSeverity {
     Critical = 5,
 }
 
-impl Default for AuditSeverity {
-    fn default() -> Self {
-        Self::Info
-    }
-}
 
 /// A structured audit event
 #[derive(Debug, Clone, Serialize, Deserialize)]

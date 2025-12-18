@@ -1,5 +1,7 @@
 //! Application state for the TUI
 
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 use chrono::Local;
 

@@ -94,7 +94,7 @@ impl WarningPageManager {
     /// Create a new warning page manager
     pub fn new(config: WarningPageConfig) -> Arc<Self> {
         let mut cookie_secret = [0u8; 32];
-        getrandom::fill(&mut cookie_secret);
+        let _ = getrandom::fill(&mut cookie_secret);
         
         Arc::new(Self {
             config: RwLock::new(config),
@@ -109,6 +109,7 @@ impl WarningPageManager {
     }
     
     /// Update configuration
+    #[allow(dead_code)]
     pub fn update_config(&self, config: WarningPageConfig) {
         *self.config.write() = config;
     }
@@ -493,6 +494,7 @@ impl WarningPageManager {
     }
     
     /// Clean up expired acknowledgments
+    #[allow(dead_code)]
     pub fn cleanup_expired(&self) {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

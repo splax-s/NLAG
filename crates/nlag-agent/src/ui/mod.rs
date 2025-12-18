@@ -232,15 +232,13 @@ fn draw_ui(frame: &mut Frame, app: &AppState) {
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &AppState) {
-    let title = vec![
-        Span::styled("n", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+    let title = [Span::styled("n", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::styled("lag", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
         Span::raw("  "),
         Span::styled(
             format!("v{}", env!("CARGO_PKG_VERSION")),
             Style::default().fg(Color::DarkGray),
-        ),
-    ];
+        )];
 
     let status_indicator = if app.is_connected {
         Span::styled(" ● ", Style::default().fg(Color::Green))

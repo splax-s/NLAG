@@ -275,15 +275,15 @@ impl GrpcHandler {
     
     /// Create a gRPC error response
     pub fn error_response(status: GrpcStatus, message: &str) -> Response<Full<Bytes>> {
-        let response = Response::builder()
+        
+        
+        Response::builder()
             .status(status.http_status())
             .header(http::header::CONTENT_TYPE, "application/grpc")
             .header("grpc-status", (status as u8).to_string())
             .header("grpc-message", message)
             .body(Full::new(Bytes::new()))
-            .unwrap();
-        
-        response
+            .unwrap()
     }
     
     /// Create gRPC trailers
@@ -302,7 +302,7 @@ impl GrpcHandler {
     }
     
     /// Decode a gRPC message frame
-    /// Format: [compressed:1][length:4][message:length]
+    /// Format: `[compressed:1][length:4][message:length]`
     pub fn decode_frame(data: &[u8]) -> Result<(bool, &[u8])> {
         if data.len() < 5 {
             return Err(GrpcError::InvalidRequest("Frame too short".to_string()));

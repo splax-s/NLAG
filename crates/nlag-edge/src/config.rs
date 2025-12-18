@@ -163,7 +163,7 @@ impl DomainConfig {
     /// Get the public port for URLs
     /// Returns the configured port, or the default port for the scheme (80/443)
     pub fn get_public_port(&self) -> u16 {
-        self.public_port.unwrap_or_else(|| {
+        self.public_port.unwrap_or({
             match self.scheme.as_str() {
                 "https" => 443,
                 _ => 80,

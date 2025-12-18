@@ -3,6 +3,8 @@
 //! This module provides support for deploying edge servers across multiple regions
 //! with region-aware routing, failover, and health checking.
 
+#![allow(dead_code)]
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -453,10 +455,12 @@ impl RegionRegistry {
 
 /// Routing strategy for edge selection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default)]
 pub enum RoutingStrategy {
     /// Round-robin across edges
     RoundRobin,
     /// Route to edge with fewest connections
+    #[default]
     LeastConnections,
     /// Route to edge with lowest latency
     LowestLatency,
@@ -464,11 +468,6 @@ pub enum RoutingStrategy {
     WeightedRandom,
 }
 
-impl Default for RoutingStrategy {
-    fn default() -> Self {
-        Self::LeastConnections
-    }
-}
 
 /// Routing preferences
 #[derive(Debug, Clone, Serialize, Deserialize)]

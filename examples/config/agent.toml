@@ -1,0 +1,87 @@
+# NLAG Agent Configuration
+# Location: ~/.nlag/config.toml
+
+# Edge server address (required)
+edge_addr = "localhost:4443"
+
+# Authentication token (get from control plane dashboard)
+# auth_token = "your-jwt-token-here"
+
+# ============================================
+# TLS Settings
+# ============================================
+[tls]
+# Skip TLS certificate verification (DEVELOPMENT ONLY!)
+# Never use this in production - it disables all TLS security
+insecure_skip_verify = true
+
+# Custom CA certificate for self-signed edge certificates
+# ca_cert = "/path/to/ca.pem"
+
+# Client certificate for mTLS authentication (optional)
+# client_cert = "/path/to/client.pem"
+# client_key = "/path/to/client-key.pem"
+
+# ============================================
+# Connection Settings
+# ============================================
+[connection]
+# Initial delay between reconnection attempts (milliseconds)
+reconnect_delay_ms = 1000
+
+# Maximum delay between reconnection attempts (milliseconds)
+max_reconnect_delay_ms = 30000
+
+# Maximum reconnection attempts (0 = infinite)
+max_reconnect_attempts = 0
+
+# Connection timeout (seconds)
+connect_timeout_secs = 30
+
+# Keep-alive interval (seconds)
+keepalive_interval_secs = 30
+
+# ============================================
+# Logging Settings
+# ============================================
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+# Log format: json, pretty
+format = "pretty"
+
+# Log to file (optional)
+# file = "/var/log/nlag/agent.log"
+
+# ============================================
+# TUI Settings
+# ============================================
+[tui]
+# Enable terminal UI (false for headless/script mode)
+enabled = true
+
+# Show request rate sparkline
+sparkline = false
+
+# Show latency gauge
+latency_gauge = false
+
+# Show detailed request cards
+request_details = false
+
+# Show health indicator
+health = false
+
+# ============================================
+# Default Expose Settings
+# ============================================
+[expose]
+# Default local host
+local_host = "127.0.0.1"
+
+# Default protocol
+protocol = "http"
+
+# Request specific subdomain (leave empty for random)
+# subdomain = "myapp"

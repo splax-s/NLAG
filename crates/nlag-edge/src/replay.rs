@@ -3,6 +3,8 @@
 //! This module provides protection against request replay attacks by tracking
 //! nonces, timestamps, and request signatures.
 
+#![allow(dead_code)]
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};

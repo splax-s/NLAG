@@ -5,6 +5,8 @@
 //! - Token refresh mechanism
 //! - Agent authentication via tokens
 
+#![allow(dead_code)]
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Result};

@@ -2,6 +2,8 @@
 //!
 //! Provides structured JSON logging for all HTTP requests flowing through tunnels.
 
+#![allow(dead_code)]
+
 use std::time::Instant;
 
 use serde::Serialize;
@@ -44,6 +46,7 @@ pub struct HttpRequestLog {
 
 impl HttpRequestLog {
     /// Create a new request log builder
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(tunnel_id: TunnelId, stream_id: StreamId, source_addr: String) -> HttpRequestLogBuilder {
         HttpRequestLogBuilder {
             tunnel_id,

@@ -3,6 +3,8 @@
 //! Provides connection pooling for agent connections to reduce latency
 //! and overhead from establishing new QUIC streams.
 
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

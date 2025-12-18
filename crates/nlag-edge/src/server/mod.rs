@@ -47,6 +47,7 @@ impl ShutdownSignal {
     }
 
     /// Wait for shutdown signal
+    #[allow(dead_code)]
     pub async fn wait(&mut self) {
         // If already shutdown, return immediately
         if *self.receiver.borrow() {
@@ -286,8 +287,8 @@ fn ensure_tls_certificates(tls: &crate::config::TlsConfig) -> anyhow::Result<()>
 
     let cert_info = generate_self_signed_cert(
         "nlag-edge.local",
-        &vec!["localhost".to_string()],
-        &vec!["127.0.0.1".parse()?, "::1".parse()?],
+        &["localhost".to_string()],
+        &["127.0.0.1".parse()?, "::1".parse()?],
         30,
         false,
     )?;
