@@ -14,13 +14,16 @@ members = [
     "crates/nlag-edge",
     "crates/nlag-control",
 ]
+exclude = [
+    "sdks/rust",
+]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 license = "Apache-2.0"
-repository = "https://github.com/nlag/nlag"
+repository = "https://github.com/splax-s/nlag"
 authors = ["NLAG Team"]
 
 [workspace.dependencies]

@@ -10,8 +10,10 @@ pub mod client;
 pub mod forwarder;
 
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use parking_lot::RwLock;
 use tokio::net::TcpStream;
 use tracing::{error, info, warn};
 
@@ -27,8 +29,97 @@ use nlag_common::{
     types::AgentId,
 };
 
+use crate::auth::{self, Credentials};
 use crate::config::{AgentConfig, TunnelOptions};
 use crate::ui::{self, UiHandle, TunnelInfo, WidgetConfig};
+
+/// Dashboard sync context for traffic reporting
+#[derive(Clone)]
+pub struct DashboardSync {
+    pub tunnel_id: Arc<RwLock<Option<String>>>,
+    pub credentials: Arc<Option<Credentials>>,
+}
+
+impl DashboardSync {
+    pub fn new(credentials: Option<Credentials>) -> Self {
+        Self {
+            tunnel_id: Arc::new(RwLock::new(None)),
+            credentials: Arc::new(credentials),
+        }
+    }
+    
+    pub fn set_tunnel_id(&self, id: String) {
+        *self.tunnel_id.write() = Some(id);
+    }
+    
+    /// Sync a request to the dashboard
+    pub async fn sync_request(&self, metadata: Option<nlag_common::protocol::message::StreamMetadata>, status: u16, duration_ms: u64) {
+        let tunnel_id = self.tunnel_id.read().clone();
+        let credentials = self.credentials.clone();
+        
+        if let (Some(tunnel_id), Some(creds)) = (tunnel_id, credentials.as_ref()) {
+            let (method, path, client_addr) = if let Some(meta) = metadata {
+                (
+                    meta.method.unwrap_or_else(|| "GET".to_string()),
+                    meta.path.unwrap_or_else(|| "/".to_string()),
+                    meta.host,
+                )
+            } else {
+                ("GET".to_string(), "/".to_string(), None)
+            };
+            
+            let record = auth::TrafficRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                tunnel_id,
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                method,
+                path,
+                headers: None,
+                body: None,
+                content_type: None,
+                content_length: None,
+                response_status: Some(status),
+                response_headers: None,
+                response_body: None,
+                duration_ms: Some(duration_ms),
+                client_addr,
+            };
+            let creds = creds.clone();
+            tokio::spawn(async move {
+                let _ = auth::sync_traffic(&creds, record).await;
+            });
+        }
+    }
+    
+    /// Sync traffic to dashboard (fire and forget)
+    pub fn sync_traffic(&self, method: &str, path: &str, status: u16, duration_ms: u64) {
+        let tunnel_id = self.tunnel_id.read().clone();
+        let credentials = self.credentials.clone();
+        
+        if let (Some(tunnel_id), Some(creds)) = (tunnel_id, credentials.as_ref()) {
+            let record = auth::TrafficRecord {
+                id: uuid::Uuid::new_v4().to_string(),
+                tunnel_id,
+                timestamp: chrono::Utc::now().to_rfc3339(),
+                method: method.to_string(),
+                path: path.to_string(),
+                headers: None,
+                body: None,
+                content_type: None,
+                content_length: None,
+                response_status: Some(status),
+                response_headers: None,
+                response_body: None,
+                duration_ms: Some(duration_ms),
+                client_addr: None,
+            };
+            let creds = creds.clone();
+            tokio::spawn(async move {
+                let _ = auth::sync_traffic(&creds, record).await;
+            });
+        }
+    }
+}
 
 /// Run tunnel with the beautiful TUI
 pub async fn run_tunnel_with_ui(
@@ -247,6 +338,34 @@ pub async fn run_tunnel(config: AgentConfig, tunnel_opts: TunnelOptions) -> anyh
         }
     }
 
+    // Create dashboard sync context if authenticated
+    let dashboard_sync = match auth::load_credentials() {
+        Ok(creds) => {
+            info!("Dashboard sync enabled ({})", creds.server);
+            // Try to register tunnel with dashboard
+            let tunnel_name = tunnel_opts.subdomain.clone()
+                .unwrap_or_else(|| format!("{}:{}", tunnel_opts.protocol, tunnel_opts.local_port));
+            let protocol_str = format!("{:?}", tunnel_opts.protocol).to_lowercase();
+            
+            match auth::register_tunnel(&creds, &tunnel_name, &protocol_str, tunnel_opts.subdomain.as_deref()).await {
+                Ok(tunnel_id) => {
+                    info!("Tunnel registered with dashboard (ID: {})", tunnel_id);
+                    let sync = DashboardSync::new(Some(creds));
+                    sync.set_tunnel_id(tunnel_id);
+                    Some(sync)
+                }
+                Err(e) => {
+                    warn!("Failed to register tunnel with dashboard: {}", e);
+                    Some(DashboardSync::new(Some(creds)))
+                }
+            }
+        }
+        Err(_) => {
+            info!("Dashboard sync disabled (not logged in)");
+            None
+        }
+    };
+
     // Reconnection loop
     let mut attempt = 0u32;
     let mut delay = Duration::from_millis(config.connection.reconnect_delay_ms);
@@ -267,7 +386,7 @@ pub async fn run_tunnel(config: AgentConfig, tunnel_opts: TunnelOptions) -> anyh
             info!("Reconnecting (attempt {})...", attempt);
         }
 
-        match run_tunnel_once(&config, &tunnel_opts, agent_id).await {
+        match run_tunnel_once(&config, &tunnel_opts, agent_id, dashboard_sync.clone()).await {
             Ok(()) => {
                 info!("Tunnel closed gracefully");
                 break;
@@ -478,6 +597,7 @@ async fn run_tunnel_once(
     config: &AgentConfig,
     tunnel_opts: &TunnelOptions,
     agent_id: AgentId,
+    dashboard_sync: Option<DashboardSync>,
 ) -> anyhow::Result<()> {
     // Parse edge address (support both IP:port and hostname:port)
     let edge_addr: SocketAddr = if let Ok(addr) = config.edge_addr.parse() {
@@ -594,7 +714,7 @@ async fn run_tunnel_once(
 
     // Handle incoming streams (new connections to forward)
     // QUIC transport already has built-in keepalive
-    let result = forwarder::forward_loop(connection.clone(), tunnel_id, &local_addr).await;
+    let result = forwarder::forward_loop(connection.clone(), tunnel_id, &local_addr, dashboard_sync).await;
 
     if let Err(e) = &result {
         warn!("Forward loop ended: {}", e);

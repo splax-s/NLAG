@@ -16,6 +16,7 @@ mod agent_config;
 mod auth;
 mod cli;
 mod config;
+mod file_server;
 mod inspect;
 mod tunnel;
 mod ui;
@@ -242,8 +243,13 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             Ok(())
         }
 
-        Commands::Login { email, server } => {
-            handle_login(email, server).await
+        Commands::Completions { shell } => {
+            cli::generate_completions(shell);
+            Ok(())
+        }
+
+        Commands::Login { email, password, server } => {
+            handle_login(email, password, server).await
         }
 
         Commands::Logout => {
@@ -265,7 +271,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
 }
 
 /// Handle the login command
-async fn handle_login(email: Option<String>, server: String) -> anyhow::Result<()> {
+async fn handle_login(email: Option<String>, password: Option<String>, server: String) -> anyhow::Result<()> {
     use std::io::{self, Write};
     
     // Get email from arg or prompt
@@ -284,8 +290,11 @@ async fn handle_login(email: Option<String>, server: String) -> anyhow::Result<(
         anyhow::bail!("Email is required");
     }
     
-    // Prompt for password (hidden input)
-    let password = rpassword::prompt_password("Password: ")?;
+    // Get password from arg, env, or prompt
+    let password = match password {
+        Some(p) => p,
+        None => rpassword::prompt_password("Password: ")?,
+    };
     
     if password.is_empty() {
         anyhow::bail!("Password is required");

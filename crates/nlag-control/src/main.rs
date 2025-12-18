@@ -20,14 +20,19 @@ use clap::Parser;
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
+mod analytics;
 mod api;
 mod apikeys;
+mod audit;
 mod auth;
 mod billing;
 mod dashboard;
 mod domains;
 mod oauth;
+mod sla;
+mod sso;
 mod store;
+mod teams;
 mod traffic;
 
 use apikeys::ApiKeyManager;

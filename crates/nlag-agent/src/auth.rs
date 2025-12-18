@@ -255,6 +255,94 @@ pub async fn can_create_tunnel(creds: &Credentials) -> Result<bool> {
     Ok(current < creds.max_tunnels)
 }
 
+/// Register a tunnel with the control plane dashboard
+pub async fn register_tunnel(
+    creds: &Credentials,
+    name: &str,
+    protocol: &str,
+    subdomain: Option<&str>,
+) -> Result<String> {
+    let client = reqwest::Client::new();
+    
+    #[derive(serde::Serialize)]
+    struct CreateTunnelRequest {
+        name: String,
+        protocol: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        subdomain: Option<String>,
+    }
+    
+    let request = CreateTunnelRequest {
+        name: name.to_string(),
+        protocol: protocol.to_string(),
+        subdomain: subdomain.map(String::from),
+    };
+    
+    let response = client
+        .post(format!("{}/api/v1/tunnels", creds.server))
+        .bearer_auth(&creds.access_token)
+        .json(&request)
+        .send()
+        .await
+        .context("Failed to register tunnel")?;
+    
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to register tunnel ({}): {}", status, body);
+    }
+    
+    #[derive(serde::Deserialize)]
+    struct TunnelResponse {
+        id: String,
+    }
+    
+    let tunnel: TunnelResponse = response.json().await?;
+    Ok(tunnel.id)
+}
+
+/// Sync a traffic record to the control plane dashboard
+pub async fn sync_traffic(creds: &Credentials, record: TrafficRecord) -> Result<()> {
+    let client = reqwest::Client::new();
+    
+    let _ = client
+        .post(format!("{}/api/v1/traffic/sync", creds.server))
+        .bearer_auth(&creds.access_token)
+        .json(&record)
+        .send()
+        .await;
+    
+    Ok(())
+}
+
+/// Traffic record for syncing to the dashboard
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TrafficRecord {
+    pub id: String,
+    pub tunnel_id: String,
+    pub timestamp: String,
+    pub method: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<Vec<(String, String)>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_length: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_status: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_headers: Option<Vec<(String, String)>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client_addr: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

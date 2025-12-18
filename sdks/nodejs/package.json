@@ -1,0 +1,61 @@
+{
+  "name": "@nlag/sdk",
+  "version": "0.1.0",
+  "description": "Node.js SDK for NLAG - Expose local services through secure tunnels",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "import": "./dist/index.mjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext .ts",
+    "format": "prettier --write src/**/*.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "nlag",
+    "tunnel",
+    "ngrok",
+    "proxy",
+    "networking",
+    "development",
+    "localhost"
+  ],
+  "author": "NLAG Team <team@nlag.dev>",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/splax-s/nlag.git",
+    "directory": "sdks/nodejs"
+  },
+  "homepage": "https://docs.nlag.dev/sdks/nodejs",
+  "bugs": {
+    "url": "https://github.com/splax-s/nlag/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "eslint": "^8.0.0",
+    "prettier": "^3.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^1.0.0"
+  }
+}

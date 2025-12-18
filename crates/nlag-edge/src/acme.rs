@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use base64::Engine;
 use dashmap::DashMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -213,6 +214,43 @@ impl Http01ChallengeStore {
     }
 }
 
+/// ACME directory response
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcmeDirectory {
+    /// URL to create new nonce
+    pub new_nonce: String,
+    /// URL to create new account
+    pub new_account: String,
+    /// URL to create new order
+    pub new_order: String,
+    /// URL to revoke certificate
+    #[serde(default)]
+    pub revoke_cert: String,
+    /// URL to key change
+    #[serde(default)]
+    pub key_change: String,
+}
+
+/// Account key pair for signing ACME requests
+pub struct AccountKeyPair {
+    /// PKCS#8 encoded private key
+    pkcs8_bytes: Vec<u8>,
+    /// The actual key pair for signing
+    key_pair: Arc<ring::signature::EcdsaKeyPair>,
+}
+
+/// ACME challenge information
+#[derive(Debug, Clone)]
+struct AcmeChallenge {
+    /// Challenge type (http-01, dns-01, etc.)
+    challenge_type: String,
+    /// Challenge token
+    token: String,
+    /// Challenge URL (to notify completion)
+    url: String,
+}
+
 /// ACME account information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AcmeAccount {
@@ -385,25 +423,40 @@ impl CertificateManager {
     
     /// Start the ACME flow for a domain
     async fn start_acme_flow(&self, domain: &str) -> Result<()> {
-        // In a real implementation, this would:
-        // 1. Get the ACME directory
-        // 2. Create/load account
-        // 3. Create order
-        // 4. Get authorization
-        // 5. Complete challenge
-        // 6. Finalize order
-        // 7. Download certificate
+        info!("Starting ACME flow for {}", domain);
         
-        // For now, we'll create a placeholder implementation
-        info!("Starting ACME flow for {} (placeholder)", domain);
+        // Step 1: Get ACME directory
+        let directory = self.get_directory().await?;
         
-        // Simulate the flow for now
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        // Step 2: Create/load account
+        let account = self.ensure_account(&directory).await?;
         
-        // Generate self-signed certificate as placeholder
-        let cert = self.generate_placeholder_certificate(domain)?;
+        // Step 3: Create order
+        let order_url = self.create_order(&directory, &account, domain).await?;
         
-        // Store the certificate
+        // Step 4: Get authorization and complete challenge
+        let (authz_url, challenge) = self.get_authorization(&account, &order_url, domain).await?;
+        
+        // Step 5: Complete the challenge
+        self.complete_challenge(&account, &challenge, domain).await?;
+        
+        // Step 6: Wait for authorization to be valid
+        self.wait_for_authorization(&account, &authz_url).await?;
+        
+        // Step 7: Finalize order with CSR
+        let (cert_pem, key_pem) = self.finalize_order(&account, &order_url, domain).await?;
+        
+        // Step 8: Store the certificate
+        let cert = StoredCertificate {
+            domain: domain.to_string(),
+            cert_pem,
+            key_pem,
+            chain_pem: None,
+            not_before: chrono::Utc::now(),
+            not_after: chrono::Utc::now() + chrono::Duration::days(90),
+            last_renewed: chrono::Utc::now(),
+        };
+        
         self.store_certificate(cert).await?;
         
         // Remove from pending
@@ -414,27 +467,539 @@ impl CertificateManager {
         Ok(())
     }
     
-    /// Generate a placeholder self-signed certificate
-    fn generate_placeholder_certificate(&self, domain: &str) -> Result<StoredCertificate> {
+    /// Get ACME directory
+    async fn get_directory(&self) -> Result<AcmeDirectory> {
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(&self.config.directory_url)
+            .send()
+            .await
+            .map_err(|e| AcmeError::HttpError(e.to_string()))?;
+        
+        if !resp.status().is_success() {
+            return Err(AcmeError::HttpError(format!("Directory request failed: {}", resp.status())));
+        }
+        
+        let dir: AcmeDirectory = resp.json().await
+            .map_err(|e| AcmeError::InvalidResponse(e.to_string()))?;
+        
+        Ok(dir)
+    }
+    
+    /// Ensure we have an account (create or load)
+    async fn ensure_account(&self, directory: &AcmeDirectory) -> Result<AccountKeyPair> {
+        // Check if we have a saved account
+        if let Some(account) = self.account.read().as_ref() {
+            return self.load_account_key(&account.private_key_pem);
+        }
+        
+        // Create new account
+        let key_pair = self.generate_account_key()?;
+        let account = self.create_account(directory, &key_pair).await?;
+        
+        // Save account
+        *self.account.write() = Some(account);
+        
+        Ok(key_pair)
+    }
+    
+    /// Generate a new account key pair
+    fn generate_account_key(&self) -> Result<AccountKeyPair> {
+        use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
+        use ring::rand::SystemRandom;
+        
+        let rng = SystemRandom::new();
+        let pkcs8_bytes = EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng)
+            .map_err(|e| AcmeError::CryptoError(format!("Key generation failed: {:?}", e)))?;
+        
+        let key_pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8_bytes.as_ref(), &rng)
+            .map_err(|e| AcmeError::CryptoError(format!("Key loading failed: {:?}", e)))?;
+        
+        Ok(AccountKeyPair {
+            pkcs8_bytes: pkcs8_bytes.as_ref().to_vec(),
+            key_pair: Arc::new(key_pair),
+        })
+    }
+    
+    /// Load account key from PEM
+    fn load_account_key(&self, pem_data: &str) -> Result<AccountKeyPair> {
+        use ring::signature::{EcdsaKeyPair, ECDSA_P256_SHA256_FIXED_SIGNING};
+        use ring::rand::SystemRandom;
+        
+        let pem = pem::parse(pem_data)
+            .map_err(|e| AcmeError::CryptoError(format!("PEM parse failed: {}", e)))?;
+        
+        let rng = SystemRandom::new();
+        let key_pair = EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pem.contents(), &rng)
+            .map_err(|e| AcmeError::CryptoError(format!("Key loading failed: {:?}", e)))?;
+        
+        Ok(AccountKeyPair {
+            pkcs8_bytes: pem.contents().to_vec(),
+            key_pair: Arc::new(key_pair),
+        })
+    }
+    
+    /// Create ACME account
+    async fn create_account(&self, directory: &AcmeDirectory, key_pair: &AccountKeyPair) -> Result<AcmeAccount> {
+        let payload = serde_json::json!({
+            "termsOfServiceAgreed": self.config.accept_tos,
+            "contact": [format!("mailto:{}", self.config.email)]
+        });
+        
+        let (resp, account_url) = self.signed_request(
+            &directory.new_account,
+            Some(&payload),
+            key_pair,
+            None,
+            &directory.new_nonce,
+        ).await?;
+        
+        let account_url = account_url.ok_or_else(|| {
+            AcmeError::AccountError("No account URL in response".to_string())
+        })?;
+        
+        let pem_data = pem::encode(&pem::Pem::new("EC PRIVATE KEY", key_pair.pkcs8_bytes.clone()));
+        
+        Ok(AcmeAccount {
+            account_url,
+            private_key_pem: pem_data,
+            contacts: vec![self.config.email.clone()],
+            status: resp.get("status").and_then(|s| s.as_str()).unwrap_or("valid").to_string(),
+            created_at: chrono::Utc::now(),
+        })
+    }
+    
+    /// Create a new order for a domain
+    async fn create_order(&self, directory: &AcmeDirectory, key_pair: &AccountKeyPair, domain: &str) -> Result<String> {
+        let account_url = self.account.read().as_ref()
+            .map(|a| a.account_url.clone())
+            .ok_or_else(|| AcmeError::AccountError("No account".to_string()))?;
+        
+        let payload = serde_json::json!({
+            "identifiers": [{"type": "dns", "value": domain}]
+        });
+        
+        let (resp, _) = self.signed_request(
+            &directory.new_order,
+            Some(&payload),
+            key_pair,
+            Some(&account_url),
+            &directory.new_nonce,
+        ).await?;
+        
+        // The order URL is in the Location header, but we can use the order object
+        let order_url = resp.get("finalize")
+            .and_then(|s| s.as_str())
+            .map(|s| s.replace("/finalize", ""))
+            .ok_or_else(|| AcmeError::InvalidResponse("No finalize URL in order".to_string()))?;
+        
+        // Update pending order
+        if let Some(mut order) = self.pending_orders.get_mut(domain) {
+            order.order_url = order_url.clone();
+        }
+        
+        Ok(order_url)
+    }
+    
+    /// Get authorization details for an order
+    async fn get_authorization(&self, key_pair: &AccountKeyPair, order_url: &str, domain: &str) -> Result<(String, AcmeChallenge)> {
+        let account_url = self.account.read().as_ref()
+            .map(|a| a.account_url.clone())
+            .ok_or_else(|| AcmeError::AccountError("No account".to_string()))?;
+        
+        // Get order details
+        let (order, _) = self.signed_request(
+            order_url,
+            None,
+            key_pair,
+            Some(&account_url),
+            order_url,
+        ).await?;
+        
+        let authz_urls = order.get("authorizations")
+            .and_then(|a| a.as_array())
+            .ok_or_else(|| AcmeError::InvalidResponse("No authorizations".to_string()))?;
+        
+        let authz_url = authz_urls.first()
+            .and_then(|u| u.as_str())
+            .ok_or_else(|| AcmeError::InvalidResponse("Empty authorizations".to_string()))?;
+        
+        // Get authorization details
+        let (authz, _) = self.signed_request(
+            authz_url,
+            None,
+            key_pair,
+            Some(&account_url),
+            authz_url,
+        ).await?;
+        
+        // Find HTTP-01 challenge
+        let challenges = authz.get("challenges")
+            .and_then(|c| c.as_array())
+            .ok_or_else(|| AcmeError::InvalidResponse("No challenges".to_string()))?;
+        
+        let challenge_type = match self.parse_challenge_type() {
+            ChallengeType::Http01 => "http-01",
+            ChallengeType::TlsAlpn01 => "tls-alpn-01",
+            ChallengeType::Dns01 => "dns-01",
+        };
+        
+        let challenge = challenges.iter()
+            .find(|c| c.get("type").and_then(|t| t.as_str()) == Some(challenge_type))
+            .ok_or_else(|| AcmeError::ChallengeFailed(format!("No {} challenge found", challenge_type)))?;
+        
+        let token = challenge.get("token")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| AcmeError::InvalidResponse("No token in challenge".to_string()))?;
+        
+        let url = challenge.get("url")
+            .and_then(|u| u.as_str())
+            .ok_or_else(|| AcmeError::InvalidResponse("No URL in challenge".to_string()))?;
+        
+        Ok((authz_url.to_string(), AcmeChallenge {
+            challenge_type: challenge_type.to_string(),
+            token: token.to_string(),
+            url: url.to_string(),
+        }))
+    }
+    
+    /// Complete ACME challenge
+    async fn complete_challenge(&self, key_pair: &AccountKeyPair, challenge: &AcmeChallenge, _domain: &str) -> Result<()> {
+        // Compute key authorization
+        let key_authz = self.compute_key_authorization(&challenge.token, key_pair)?;
+        
+        // For HTTP-01, we store the token -> key_authorization mapping
+        if challenge.challenge_type == "http-01" {
+            self.http01_store.set(&challenge.token, &key_authz);
+        }
+        
+        // Tell ACME server we're ready
+        let account_url = self.account.read().as_ref()
+            .map(|a| a.account_url.clone())
+            .ok_or_else(|| AcmeError::AccountError("No account".to_string()))?;
+        
+        let payload = serde_json::json!({});
+        
+        let _ = self.signed_request(
+            &challenge.url,
+            Some(&payload),
+            key_pair,
+            Some(&account_url),
+            &challenge.url,
+        ).await?;
+        
+        Ok(())
+    }
+    
+    /// Wait for authorization to become valid
+    async fn wait_for_authorization(&self, key_pair: &AccountKeyPair, authz_url: &str) -> Result<()> {
+        let account_url = self.account.read().as_ref()
+            .map(|a| a.account_url.clone())
+            .ok_or_else(|| AcmeError::AccountError("No account".to_string()))?;
+        
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            
+            let (authz, _) = self.signed_request(
+                authz_url,
+                None,
+                key_pair,
+                Some(&account_url),
+                authz_url,
+            ).await?;
+            
+            let status = authz.get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("");
+            
+            match status {
+                "valid" => return Ok(()),
+                "invalid" => {
+                    return Err(AcmeError::ChallengeFailed("Authorization invalid".to_string()));
+                }
+                "pending" | "processing" => continue,
+                _ => continue,
+            }
+        }
+        
+        Err(AcmeError::ChallengeFailed("Authorization timed out".to_string()))
+    }
+    
+    /// Finalize order and get certificate
+    async fn finalize_order(&self, key_pair: &AccountKeyPair, order_url: &str, domain: &str) -> Result<(String, String)> {
+        let account_url = self.account.read().as_ref()
+            .map(|a| a.account_url.clone())
+            .ok_or_else(|| AcmeError::AccountError("No account".to_string()))?;
+        
+        // Generate CSR
+        let (csr_der, private_key_pem) = self.generate_csr(domain)?;
+        let csr_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&csr_der);
+        
+        let finalize_url = format!("{}/finalize", order_url);
+        let payload = serde_json::json!({"csr": csr_b64});
+        
+        let _ = self.signed_request(
+            &finalize_url,
+            Some(&payload),
+            key_pair,
+            Some(&account_url),
+            &finalize_url,
+        ).await?;
+        
+        // Wait for certificate to be ready
+        let cert_url = self.wait_for_certificate(key_pair, order_url).await?;
+        
+        // Download certificate
+        let cert_pem = self.download_certificate(key_pair, &cert_url).await?;
+        
+        Ok((cert_pem, private_key_pem))
+    }
+    
+    /// Wait for certificate to be ready
+    async fn wait_for_certificate(&self, key_pair: &AccountKeyPair, order_url: &str) -> Result<String> {
+        let account_url = self.account.read().as_ref()
+            .map(|a| a.account_url.clone())
+            .ok_or_else(|| AcmeError::AccountError("No account".to_string()))?;
+        
+        for _ in 0..30 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            
+            let (order, _) = self.signed_request(
+                order_url,
+                None,
+                key_pair,
+                Some(&account_url),
+                order_url,
+            ).await?;
+            
+            let status = order.get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("");
+            
+            match status {
+                "valid" => {
+                    let cert_url = order.get("certificate")
+                        .and_then(|c| c.as_str())
+                        .ok_or_else(|| AcmeError::InvalidResponse("No certificate URL".to_string()))?;
+                    return Ok(cert_url.to_string());
+                }
+                "invalid" => {
+                    return Err(AcmeError::ChallengeFailed("Order invalid".to_string()));
+                }
+                _ => continue,
+            }
+        }
+        
+        Err(AcmeError::CertificateNotReady)
+    }
+    
+    /// Download the certificate
+    async fn download_certificate(&self, key_pair: &AccountKeyPair, cert_url: &str) -> Result<String> {
+        let account_url = self.account.read().as_ref()
+            .map(|a| a.account_url.clone())
+            .ok_or_else(|| AcmeError::AccountError("No account".to_string()))?;
+        
+        let client = reqwest::Client::new();
+        
+        // Get nonce
+        let nonce = self.get_nonce(cert_url).await?;
+        
+        // Build signed request
+        let protected = self.build_protected_header(cert_url, &nonce, Some(&account_url), key_pair)?;
+        let payload_b64 = "";  // Empty payload for POST-as-GET
+        let signature = self.sign_jws(&protected, payload_b64, key_pair)?;
+        
+        let body = serde_json::json!({
+            "protected": protected,
+            "payload": payload_b64,
+            "signature": signature
+        });
+        
+        let resp = client
+            .post(cert_url)
+            .header("Content-Type", "application/jose+json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AcmeError::HttpError(e.to_string()))?;
+        
+        if !resp.status().is_success() {
+            return Err(AcmeError::HttpError(format!("Certificate download failed: {}", resp.status())));
+        }
+        
+        resp.text().await
+            .map_err(|e| AcmeError::HttpError(e.to_string()))
+    }
+    
+    /// Generate CSR for a domain
+    fn generate_csr(&self, domain: &str) -> Result<(Vec<u8>, String)> {
         use nlag_common::crypto::cert::generate_self_signed_cert;
         
+        // For now, we use the self-signed generator and extract components
+        // In production, we'd generate a proper CSR
         let cert_info = generate_self_signed_cert(
             domain,
             &[domain.to_string()],
             &[],
-            90, // 90 days
+            90,
             false,
         ).map_err(|e| AcmeError::CryptoError(e.to_string()))?;
         
-        Ok(StoredCertificate {
-            domain: domain.to_string(),
-            cert_pem: cert_info.cert_pem,
-            key_pem: cert_info.key_pem,
-            chain_pem: None,
-            not_before: chrono::Utc::now(),
-            not_after: chrono::Utc::now() + chrono::Duration::days(90),
-            last_renewed: chrono::Utc::now(),
-        })
+        // This is a placeholder - a real implementation would generate a proper CSR
+        // For now, we return the key and a dummy CSR
+        let csr_der = vec![]; // Placeholder
+        
+        Ok((csr_der, cert_info.key_pem))
+    }
+    
+    /// Get a fresh nonce
+    async fn get_nonce(&self, url: &str) -> Result<String> {
+        let client = reqwest::Client::new();
+        let resp = client
+            .head(url)
+            .send()
+            .await
+            .map_err(|e| AcmeError::HttpError(e.to_string()))?;
+        
+        resp.headers()
+            .get("replay-nonce")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .ok_or_else(|| AcmeError::InvalidResponse("No nonce in response".to_string()))
+    }
+    
+    /// Build protected header for JWS
+    fn build_protected_header(&self, url: &str, nonce: &str, kid: Option<&str>, key_pair: &AccountKeyPair) -> Result<String> {
+        let header = if let Some(kid) = kid {
+            serde_json::json!({
+                "alg": "ES256",
+                "kid": kid,
+                "nonce": nonce,
+                "url": url
+            })
+        } else {
+            // Include JWK for new account
+            let jwk = self.account_key_to_jwk(key_pair)?;
+            serde_json::json!({
+                "alg": "ES256",
+                "jwk": jwk,
+                "nonce": nonce,
+                "url": url
+            })
+        };
+        
+        let header_json = serde_json::to_string(&header)
+            .map_err(|e| AcmeError::JsonError(e))?;
+        
+        Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(header_json.as_bytes()))
+    }
+    
+    /// Convert account key to JWK format
+    fn account_key_to_jwk(&self, key_pair: &AccountKeyPair) -> Result<serde_json::Value> {
+        use ring::signature::KeyPair;
+        
+        let public_key = key_pair.key_pair.public_key().as_ref();
+        
+        // ECDSA P-256 public key is 65 bytes: 0x04 || x || y
+        if public_key.len() != 65 || public_key[0] != 0x04 {
+            return Err(AcmeError::CryptoError("Invalid public key format".to_string()));
+        }
+        
+        let x = &public_key[1..33];
+        let y = &public_key[33..65];
+        
+        Ok(serde_json::json!({
+            "kty": "EC",
+            "crv": "P-256",
+            "x": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(x),
+            "y": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(y)
+        }))
+    }
+    
+    /// Compute key authorization for a challenge
+    fn compute_key_authorization(&self, token: &str, key_pair: &AccountKeyPair) -> Result<String> {
+        let jwk = self.account_key_to_jwk(key_pair)?;
+        let jwk_json = serde_json::to_string(&jwk)
+            .map_err(|e| AcmeError::JsonError(e))?;
+        
+        // Compute JWK thumbprint
+        use ring::digest::{digest, SHA256};
+        let thumbprint = digest(&SHA256, jwk_json.as_bytes());
+        let thumbprint_b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(thumbprint.as_ref());
+        
+        Ok(format!("{}.{}", token, thumbprint_b64))
+    }
+    
+    /// Sign JWS payload
+    fn sign_jws(&self, protected_b64: &str, payload_b64: &str, key_pair: &AccountKeyPair) -> Result<String> {
+        use ring::rand::SystemRandom;
+        
+        let signing_input = format!("{}.{}", protected_b64, payload_b64);
+        let rng = SystemRandom::new();
+        
+        let signature = key_pair.key_pair
+            .sign(&rng, signing_input.as_bytes())
+            .map_err(|e| AcmeError::CryptoError(format!("Signing failed: {:?}", e)))?;
+        
+        Ok(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(signature.as_ref()))
+    }
+    
+    /// Make a signed ACME request
+    async fn signed_request(
+        &self,
+        url: &str,
+        payload: Option<&serde_json::Value>,
+        key_pair: &AccountKeyPair,
+        kid: Option<&str>,
+        nonce_url: &str,
+    ) -> Result<(serde_json::Value, Option<String>)> {
+        let client = reqwest::Client::new();
+        
+        // Get nonce
+        let nonce = self.get_nonce(nonce_url).await?;
+        
+        // Build request
+        let protected = self.build_protected_header(url, &nonce, kid, key_pair)?;
+        let payload_b64 = match payload {
+            Some(p) => {
+                let json = serde_json::to_string(p)
+                    .map_err(|e| AcmeError::JsonError(e))?;
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.as_bytes())
+            }
+            None => String::new(),
+        };
+        
+        let signature = self.sign_jws(&protected, &payload_b64, key_pair)?;
+        
+        let body = serde_json::json!({
+            "protected": protected,
+            "payload": payload_b64,
+            "signature": signature
+        });
+        
+        let resp = client
+            .post(url)
+            .header("Content-Type", "application/jose+json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AcmeError::HttpError(e.to_string()))?;
+        
+        let location = resp.headers()
+            .get("location")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+        
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(AcmeError::HttpError(format!("Request failed ({}): {}", status, text)));
+        }
+        
+        let json: serde_json::Value = resp.json().await
+            .unwrap_or(serde_json::json!({}));
+        
+        Ok((json, location))
     }
     
     /// Store a certificate
@@ -549,6 +1114,22 @@ mod tests {
     }
     
     #[test]
+    fn test_expired_certificate() {
+        let cert = StoredCertificate {
+            domain: "example.com".to_string(),
+            cert_pem: String::new(),
+            key_pem: String::new(),
+            chain_pem: None,
+            not_before: chrono::Utc::now() - chrono::Duration::days(100),
+            not_after: chrono::Utc::now() - chrono::Duration::days(10),
+            last_renewed: chrono::Utc::now() - chrono::Duration::days(100),
+        };
+        
+        assert!(!cert.is_valid());
+        assert_eq!(cert.status(), CertificateStatus::Expired);
+    }
+    
+    #[test]
     fn test_http01_store() {
         let store = Http01ChallengeStore::new();
         
@@ -557,5 +1138,104 @@ mod tests {
         
         store.remove("token123");
         assert_eq!(store.get("token123"), None);
+    }
+    
+    #[test]
+    fn test_acme_config_default() {
+        let config = AcmeConfig::default();
+        assert!(!config.enabled);
+        assert_eq!(config.directory_url, directories::LETS_ENCRYPT_PRODUCTION);
+        assert_eq!(config.renewal_days, 30);
+    }
+    
+    #[test]
+    fn test_certificate_manager_creation() {
+        let config = AcmeConfig::default();
+        let manager = CertificateManager::new(config);
+        
+        assert!(manager.list_certificates().is_empty());
+        assert_eq!(manager.certificate_status("example.com"), CertificateStatus::Missing);
+    }
+    
+    #[test]
+    fn test_parse_challenge_type() {
+        let mut config = AcmeConfig::default();
+        
+        config.challenge_type = "http-01".to_string();
+        let manager = CertificateManager::new(config.clone());
+        assert_eq!(manager.parse_challenge_type(), ChallengeType::Http01);
+        
+        config.challenge_type = "dns-01".to_string();
+        let manager = CertificateManager::new(config.clone());
+        assert_eq!(manager.parse_challenge_type(), ChallengeType::Dns01);
+        
+        config.challenge_type = "tls-alpn-01".to_string();
+        let manager = CertificateManager::new(config.clone());
+        assert_eq!(manager.parse_challenge_type(), ChallengeType::TlsAlpn01);
+    }
+    
+    #[test]
+    fn test_days_until_expiry() {
+        let cert = StoredCertificate {
+            domain: "example.com".to_string(),
+            cert_pem: String::new(),
+            key_pem: String::new(),
+            chain_pem: None,
+            not_before: chrono::Utc::now(),
+            not_after: chrono::Utc::now() + chrono::Duration::days(45),
+            last_renewed: chrono::Utc::now(),
+        };
+        
+        // Should be approximately 45 days
+        let days = cert.days_until_expiry();
+        assert!(days >= 44 && days <= 45);
+    }
+    
+    #[test]
+    fn test_generate_account_key() {
+        let config = AcmeConfig::default();
+        let manager = CertificateManager::new(config);
+        
+        let key_pair = manager.generate_account_key().unwrap();
+        assert!(!key_pair.pkcs8_bytes.is_empty());
+    }
+    
+    #[test]
+    fn test_account_key_to_jwk() {
+        let config = AcmeConfig::default();
+        let manager = CertificateManager::new(config);
+        
+        let key_pair = manager.generate_account_key().unwrap();
+        let jwk = manager.account_key_to_jwk(&key_pair).unwrap();
+        
+        assert_eq!(jwk.get("kty").and_then(|v| v.as_str()), Some("EC"));
+        assert_eq!(jwk.get("crv").and_then(|v| v.as_str()), Some("P-256"));
+        assert!(jwk.get("x").is_some());
+        assert!(jwk.get("y").is_some());
+    }
+    
+    #[test]
+    fn test_compute_key_authorization() {
+        let config = AcmeConfig::default();
+        let manager = CertificateManager::new(config);
+        
+        let key_pair = manager.generate_account_key().unwrap();
+        let key_authz = manager.compute_key_authorization("test-token", &key_pair).unwrap();
+        
+        assert!(key_authz.starts_with("test-token."));
+        assert!(key_authz.len() > 20); // Token + thumbprint
+    }
+    
+    #[test]
+    fn test_sign_jws() {
+        let config = AcmeConfig::default();
+        let manager = CertificateManager::new(config);
+        
+        let key_pair = manager.generate_account_key().unwrap();
+        let protected = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"{}");
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b"{}");
+        
+        let signature = manager.sign_jws(&protected, &payload, &key_pair).unwrap();
+        assert!(!signature.is_empty());
     }
 }

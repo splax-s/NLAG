@@ -1,0 +1,233 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tunnels.nlag.dev
+  labels:
+    app.kubernetes.io/name: nlag
+    app.kubernetes.io/component: operator
+spec:
+  group: nlag.dev
+  scope: Namespaced
+  names:
+    kind: Tunnel
+    plural: tunnels
+    singular: tunnel
+    shortNames:
+      - tun
+    categories:
+      - nlag
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              required:
+                - target
+              properties:
+                target:
+                  type: object
+                  description: Target service to expose
+                  required:
+                    - service
+                    - port
+                  properties:
+                    service:
+                      type: string
+                      description: Name of the Kubernetes service to expose
+                    port:
+                      type: integer
+                      description: Port number on the target service
+                      minimum: 1
+                      maximum: 65535
+                    namespace:
+                      type: string
+                      description: Namespace of the target service (defaults to tunnel namespace)
+                protocol:
+                  type: string
+                  description: Protocol to use for tunneling
+                  enum:
+                    - http
+                    - https
+                    - tcp
+                    - udp
+                    - grpc
+                    - websocket
+                  default: http
+                subdomain:
+                  type: string
+                  description: Requested subdomain for the tunnel
+                  pattern: "^[a-z0-9][a-z0-9-]*[a-z0-9]$"
+                  maxLength: 63
+                customDomain:
+                  type: string
+                  description: Custom domain for the tunnel (requires domain verification)
+                edgeServer:
+                  type: string
+                  description: Edge server to connect to
+                  default: edge.nlag.dev:4443
+                auth:
+                  type: object
+                  description: Authentication configuration
+                  properties:
+                    basicAuth:
+                      type: object
+                      description: Basic authentication credentials
+                      properties:
+                        secretRef:
+                          type: object
+                          description: Reference to a secret containing credentials
+                          required:
+                            - name
+                          properties:
+                            name:
+                              type: string
+                              description: Name of the secret
+                            key:
+                              type: string
+                              description: Key in the secret (defaults to 'auth')
+                              default: auth
+                    oauth:
+                      type: object
+                      description: OAuth/OIDC configuration
+                      properties:
+                        provider:
+                          type: string
+                          description: OAuth provider
+                          enum:
+                            - google
+                            - github
+                            - microsoft
+                        allowedEmails:
+                          type: array
+                          description: List of allowed email addresses
+                          items:
+                            type: string
+                        allowedDomains:
+                          type: array
+                          description: List of allowed email domains
+                          items:
+                            type: string
+                ipPolicy:
+                  type: object
+                  description: IP-based access control
+                  properties:
+                    allow:
+                      type: array
+                      description: List of allowed IP ranges (CIDR notation)
+                      items:
+                        type: string
+                    deny:
+                      type: array
+                      description: List of denied IP ranges (CIDR notation)
+                      items:
+                        type: string
+                headers:
+                  type: object
+                  description: Custom headers to add to requests
+                  additionalProperties:
+                    type: string
+                circuitBreaker:
+                  type: object
+                  description: Circuit breaker configuration
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                    failureThreshold:
+                      type: integer
+                      default: 5
+                      minimum: 1
+                    recoveryTimeout:
+                      type: string
+                      description: Duration before attempting recovery
+                      default: "30s"
+                rateLimit:
+                  type: object
+                  description: Rate limiting configuration
+                  properties:
+                    requestsPerSecond:
+                      type: integer
+                      description: Maximum requests per second
+                      minimum: 1
+                    burstSize:
+                      type: integer
+                      description: Burst size for rate limiting
+                      minimum: 1
+                metadata:
+                  type: object
+                  description: Custom metadata for the tunnel
+                  additionalProperties:
+                    type: string
+            status:
+              type: object
+              properties:
+                state:
+                  type: string
+                  description: Current tunnel state
+                  enum:
+                    - Pending
+                    - Connecting
+                    - Connected
+                    - Error
+                    - Terminating
+                publicUrl:
+                  type: string
+                  description: Public URL of the tunnel
+                tunnelId:
+                  type: string
+                  description: Unique tunnel identifier
+                lastConnected:
+                  type: string
+                  format: date-time
+                  description: Last successful connection time
+                message:
+                  type: string
+                  description: Human-readable status message
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - "Unknown"
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: State
+          type: string
+          jsonPath: .status.state
+        - name: URL
+          type: string
+          jsonPath: .status.publicUrl
+        - name: Protocol
+          type: string
+          jsonPath: .spec.protocol
+        - name: Target
+          type: string
+          jsonPath: .spec.target.service
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

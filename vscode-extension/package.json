@@ -1,0 +1,212 @@
+{
+  "name": "nlag-tunnels",
+  "displayName": "NLAG Tunnels",
+  "description": "Create and manage NLAG tunnels directly from VS Code",
+  "version": "0.1.0",
+  "publisher": "nlag",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/splax-s/nlag"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "tunnel",
+    "nlag",
+    "ngrok",
+    "localhost",
+    "expose",
+    "proxy"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "nlag.expose",
+        "title": "NLAG: Expose Port",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "nlag.exposeQuick",
+        "title": "NLAG: Quick Expose",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "nlag.listTunnels",
+        "title": "NLAG: List Tunnels",
+        "icon": "$(list-tree)"
+      },
+      {
+        "command": "nlag.closeTunnel",
+        "title": "NLAG: Close Tunnel",
+        "icon": "$(close)"
+      },
+      {
+        "command": "nlag.closeAllTunnels",
+        "title": "NLAG: Close All Tunnels",
+        "icon": "$(close-all)"
+      },
+      {
+        "command": "nlag.openInspector",
+        "title": "NLAG: Open Inspector",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "nlag.copyUrl",
+        "title": "NLAG: Copy Tunnel URL",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "nlag.login",
+        "title": "NLAG: Login",
+        "icon": "$(sign-in)"
+      },
+      {
+        "command": "nlag.logout",
+        "title": "NLAG: Logout",
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "nlag.refreshTunnels",
+        "title": "NLAG: Refresh Tunnels",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nlag",
+          "title": "NLAG Tunnels",
+          "icon": "$(cloud-upload)"
+        }
+      ]
+    },
+    "views": {
+      "nlag": [
+        {
+          "id": "nlag.tunnels",
+          "name": "Tunnels",
+          "icon": "$(plug)",
+          "contextualTitle": "NLAG Tunnels"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "nlag.tunnels",
+        "contents": "No tunnels running.\n[Expose Port](command:nlag.expose)\n[Quick Expose](command:nlag.exposeQuick)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "nlag.expose",
+          "when": "view == nlag.tunnels",
+          "group": "navigation@1"
+        },
+        {
+          "command": "nlag.refreshTunnels",
+          "when": "view == nlag.tunnels",
+          "group": "navigation@2"
+        },
+        {
+          "command": "nlag.closeAllTunnels",
+          "when": "view == nlag.tunnels",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "nlag.copyUrl",
+          "when": "view == nlag.tunnels && viewItem == tunnel",
+          "group": "inline@1"
+        },
+        {
+          "command": "nlag.openInspector",
+          "when": "view == nlag.tunnels && viewItem == tunnel",
+          "group": "inline@2"
+        },
+        {
+          "command": "nlag.closeTunnel",
+          "when": "view == nlag.tunnels && viewItem == tunnel",
+          "group": "inline@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "NLAG Tunnels",
+      "properties": {
+        "nlag.apiUrl": {
+          "type": "string",
+          "default": "https://api.nlag.dev",
+          "description": "NLAG API URL"
+        },
+        "nlag.edgeUrl": {
+          "type": "string",
+          "default": "wss://connect.nlag.dev",
+          "description": "NLAG edge server URL"
+        },
+        "nlag.region": {
+          "type": "string",
+          "default": "",
+          "description": "Preferred region for tunnels"
+        },
+        "nlag.defaultProtocol": {
+          "type": "string",
+          "enum": ["http", "https", "tcp", "udp", "grpc", "websocket"],
+          "default": "http",
+          "description": "Default protocol for new tunnels"
+        },
+        "nlag.showStatusBarItem": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show tunnel count in status bar"
+        },
+        "nlag.autoExposeOnDebug": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically expose debug port when starting a debug session"
+        },
+        "nlag.debugPort": {
+          "type": "number",
+          "default": 3000,
+          "description": "Port to expose when auto-exposing on debug"
+        }
+      }
+    },
+    "keybindings": [
+      {
+        "command": "nlag.exposeQuick",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "@vscode/test-electron": "^2.3.8",
+    "eslint": "^8.55.0",
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^2.22.0"
+  },
+  "dependencies": {}
+}

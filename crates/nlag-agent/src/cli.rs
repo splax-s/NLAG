@@ -3,7 +3,9 @@
 //! This module defines all command-line arguments and subcommands
 //! for the NLAG agent.
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
+use std::io;
 
 /// NLAG Agent - Expose local services through secure tunnels
 #[derive(Parser, Debug)]
@@ -130,8 +132,12 @@ pub enum Commands {
         #[arg(short, long)]
         email: Option<String>,
 
+        /// Password (for scripting, or use NLAG_PASSWORD env var)
+        #[arg(short, long, env = "NLAG_PASSWORD")]
+        password: Option<String>,
+
         /// Control plane server address
-        #[arg(short, long, default_value = "https://api.nlag.dev")]
+        #[arg(short = 'S', long, default_value = "https://api.nlag.dev")]
         server: String,
     },
 
@@ -158,6 +164,48 @@ pub enum Commands {
 
     /// Show version information
     Version,
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        #[arg(value_enum)]
+        shell: ShellType,
+    },
+}
+
+/// Shell types for completion generation
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum ShellType {
+    /// Bash shell
+    Bash,
+    /// Zsh shell
+    Zsh,
+    /// Fish shell
+    Fish,
+    /// PowerShell
+    PowerShell,
+    /// Elvish shell
+    Elvish,
+}
+
+impl ShellType {
+    /// Convert to clap_complete Shell type
+    pub fn to_clap_shell(self) -> Shell {
+        match self {
+            ShellType::Bash => Shell::Bash,
+            ShellType::Zsh => Shell::Zsh,
+            ShellType::Fish => Shell::Fish,
+            ShellType::PowerShell => Shell::PowerShell,
+            ShellType::Elvish => Shell::Elvish,
+        }
+    }
+}
+
+/// Generate shell completions and print to stdout
+pub fn generate_completions(shell: ShellType) {
+    let mut cmd = Cli::command();
+    let name = cmd.get_name().to_string();
+    generate(shell.to_clap_shell(), &mut cmd, name, &mut io::stdout());
 }
 
 #[derive(Subcommand, Debug)]
@@ -282,5 +330,41 @@ mod tests {
             }
             _ => panic!("Wrong command"),
         }
+    }
+
+    #[test]
+    fn test_completions_command() {
+        let cli = Cli::parse_from(["nlag", "completions", "bash"]);
+        match cli.command {
+            Commands::Completions { shell } => {
+                assert!(matches!(shell, ShellType::Bash));
+            }
+            _ => panic!("Wrong command"),
+        }
+
+        let cli = Cli::parse_from(["nlag", "completions", "zsh"]);
+        match cli.command {
+            Commands::Completions { shell } => {
+                assert!(matches!(shell, ShellType::Zsh));
+            }
+            _ => panic!("Wrong command"),
+        }
+
+        let cli = Cli::parse_from(["nlag", "completions", "fish"]);
+        match cli.command {
+            Commands::Completions { shell } => {
+                assert!(matches!(shell, ShellType::Fish));
+            }
+            _ => panic!("Wrong command"),
+        }
+    }
+
+    #[test]
+    fn test_shell_type_conversion() {
+        assert!(matches!(ShellType::Bash.to_clap_shell(), Shell::Bash));
+        assert!(matches!(ShellType::Zsh.to_clap_shell(), Shell::Zsh));
+        assert!(matches!(ShellType::Fish.to_clap_shell(), Shell::Fish));
+        assert!(matches!(ShellType::PowerShell.to_clap_shell(), Shell::PowerShell));
+        assert!(matches!(ShellType::Elvish.to_clap_shell(), Shell::Elvish));
     }
 }

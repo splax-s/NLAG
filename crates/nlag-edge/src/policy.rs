@@ -129,6 +129,32 @@ pub struct ResponseModifications {
     pub add_headers: HashMap<String, String>,
     /// Headers to remove
     pub remove_headers: Vec<String>,
+    /// Compression settings (if enabled)
+    pub compression: Option<CompressionSettings>,
+    /// Caching settings (if enabled)
+    pub caching: Option<CachingSettings>,
+}
+
+/// Compression settings for response
+#[derive(Debug, Clone)]
+pub struct CompressionSettings {
+    /// Algorithm: gzip, br, deflate
+    pub algorithm: String,
+    /// Minimum size to compress (bytes)
+    pub min_size: usize,
+    /// Content types to compress (glob patterns)
+    pub types: Vec<String>,
+}
+
+/// Caching settings for response
+#[derive(Debug, Clone)]
+pub struct CachingSettings {
+    /// Cache TTL in seconds
+    pub ttl: u64,
+    /// Cache key
+    pub key: String,
+    /// Methods to cache
+    pub methods: Vec<String>,
 }
 
 // ============================================================================
@@ -559,11 +585,12 @@ impl PolicyEngine {
     }
     
     /// Evaluate policies for a request
-    pub fn evaluate(&self, ctx: &RequestContext) -> (PolicyDecision, RequestModifications) {
+    pub fn evaluate(&self, ctx: &RequestContext) -> (PolicyDecision, RequestModifications, ResponseModifications) {
         let config = self.config.read();
         let patterns = self.patterns.read();
         
         let mut modifications = RequestModifications::default();
+        let mut response_modifications = ResponseModifications::default();
         
         for pattern in patterns.iter() {
             let policy = &config.policies[pattern.policy_index];
@@ -576,12 +603,12 @@ impl PolicyEngine {
             debug!("Request matched policy: {}", policy.name);
             
             // Apply actions
-            if let Some(decision) = self.apply_actions(ctx, &policy.actions, &mut modifications) {
-                return (decision, modifications);
+            if let Some(decision) = self.apply_actions(ctx, &policy.actions, &mut modifications, &mut response_modifications) {
+                return (decision, modifications, response_modifications);
             }
         }
         
-        (PolicyDecision::Allow, modifications)
+        (PolicyDecision::Allow, modifications, response_modifications)
     }
     
     /// Check if a request matches a policy
@@ -648,6 +675,7 @@ impl PolicyEngine {
         ctx: &RequestContext,
         actions: &PolicyActions,
         modifications: &mut RequestModifications,
+        response_mods: &mut ResponseModifications,
     ) -> Option<PolicyDecision> {
         // Check deny first
         if let Some(deny) = &actions.deny {
@@ -739,6 +767,30 @@ impl PolicyEngine {
                 let current = modifications.rewrite_path.as_ref().unwrap_or(&ctx.path);
                 modifications.rewrite_path = Some(format!("{}{}", prefix, current));
             }
+        }
+        
+        // Apply compression settings
+        if let Some(compress) = &actions.compress {
+            response_mods.compression = Some(CompressionSettings {
+                algorithm: compress.algorithm.clone(),
+                min_size: compress.min_size,
+                types: compress.types.clone(),
+            });
+        }
+        
+        // Apply caching settings
+        if let Some(cache) = &actions.cache {
+            // Generate cache key from template
+            let cache_key = cache.key
+                .replace("$method", &ctx.method)
+                .replace("$path", &ctx.path)
+                .replace("$tunnel", &ctx.tunnel_id);
+            
+            response_mods.caching = Some(CachingSettings {
+                ttl: cache.ttl,
+                key: cache_key,
+                methods: cache.methods.clone(),
+            });
         }
         
         None // Continue processing
@@ -970,7 +1022,7 @@ policies:
             host: None,
         };
         
-        let (decision, _) = engine.evaluate(&ctx);
+        let (decision, _, _) = engine.evaluate(&ctx);
         
         match decision {
             PolicyDecision::Deny { status, .. } => assert_eq!(status, 403),
@@ -1007,11 +1059,85 @@ policies:
         };
         
         // First request should pass
-        let (decision, _) = engine.evaluate(&ctx);
+        let (decision, _, _) = engine.evaluate(&ctx);
         assert!(matches!(decision, PolicyDecision::Allow));
         
         // Second immediate request should be rate limited
-        let (decision, _) = engine.evaluate(&ctx);
+        let (decision, _, _) = engine.evaluate(&ctx);
         assert!(matches!(decision, PolicyDecision::RateLimited { .. }));
+    }
+    
+    #[test]
+    fn test_compression_action() {
+        let engine = PolicyEngine::new();
+        
+        let yaml = r#"
+policies:
+  - name: "compress-api"
+    match:
+      path: "/api/*"
+    actions:
+      compress:
+        algorithm: "gzip"
+        min_size: 1024
+        types:
+          - "application/json"
+"#;
+        
+        engine.load_from_string(yaml).unwrap();
+        
+        let ctx = RequestContext {
+            path: "/api/data".to_string(),
+            method: "GET".to_string(),
+            headers: HashMap::new(),
+            client_ip: None,
+            tunnel_id: "test".to_string(),
+            subdomain: None,
+            host: None,
+        };
+        
+        let (decision, _, response_mods) = engine.evaluate(&ctx);
+        assert!(matches!(decision, PolicyDecision::Allow));
+        
+        let compression = response_mods.compression.unwrap();
+        assert_eq!(compression.algorithm, "gzip");
+        assert_eq!(compression.min_size, 1024);
+        assert!(compression.types.contains(&"application/json".to_string()));
+    }
+    
+    #[test]
+    fn test_cache_action() {
+        let engine = PolicyEngine::new();
+        
+        let yaml = r#"
+policies:
+  - name: "cache-static"
+    match:
+      path: "/static/*"
+      methods: ["GET"]
+    actions:
+      cache:
+        ttl: 3600
+        key: "$method:$path"
+"#;
+        
+        engine.load_from_string(yaml).unwrap();
+        
+        let ctx = RequestContext {
+            path: "/static/image.png".to_string(),
+            method: "GET".to_string(),
+            headers: HashMap::new(),
+            client_ip: None,
+            tunnel_id: "test".to_string(),
+            subdomain: None,
+            host: None,
+        };
+        
+        let (decision, _, response_mods) = engine.evaluate(&ctx);
+        assert!(matches!(decision, PolicyDecision::Allow));
+        
+        let caching = response_mods.caching.unwrap();
+        assert_eq!(caching.ttl, 3600);
+        assert_eq!(caching.key, "GET:/static/image.png");
     }
 }

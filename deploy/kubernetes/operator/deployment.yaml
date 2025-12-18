@@ -1,0 +1,169 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: nlag-system
+  labels:
+    app.kubernetes.io/name: nlag
+    app.kubernetes.io/component: operator
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nlag-operator
+  namespace: nlag-system
+  labels:
+    app.kubernetes.io/name: nlag
+    app.kubernetes.io/component: operator
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: nlag-operator
+  labels:
+    app.kubernetes.io/name: nlag
+    app.kubernetes.io/component: operator
+rules:
+  # Tunnel and TunnelConfig resources
+  - apiGroups: ["nlag.dev"]
+    resources: ["tunnels", "tunnelconfigs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["nlag.dev"]
+    resources: ["tunnels/status", "tunnelconfigs/status"]
+    verbs: ["get", "update", "patch"]
+  - apiGroups: ["nlag.dev"]
+    resources: ["tunnels/finalizers", "tunnelconfigs/finalizers"]
+    verbs: ["update"]
+  # Services (to resolve target services)
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  # Endpoints (to get service endpoints)
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch"]
+  # Secrets (to read credentials)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+  # Events (to record events on tunnels)
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # Leases (for leader election)
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: nlag-operator
+  labels:
+    app.kubernetes.io/name: nlag
+    app.kubernetes.io/component: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: nlag-operator
+subjects:
+  - kind: ServiceAccount
+    name: nlag-operator
+    namespace: nlag-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nlag-operator
+  namespace: nlag-system
+  labels:
+    app.kubernetes.io/name: nlag
+    app.kubernetes.io/component: operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nlag
+      app.kubernetes.io/component: operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nlag
+        app.kubernetes.io/component: operator
+    spec:
+      serviceAccountName: nlag-operator
+      containers:
+        - name: operator
+          image: ghcr.io/nlag-dev/nlag-operator:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - "--leader-elect"
+            - "--metrics-bind-address=:8080"
+            - "--health-probe-bind-address=:8081"
+          env:
+            - name: NLAG_EDGE_URL
+              value: "edge.nlag.dev:4443"
+            - name: NLAG_LOG_LEVEL
+              value: "info"
+            - name: NLAG_RECONCILE_INTERVAL
+              value: "30s"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: metrics
+              containerPort: 8080
+              protocol: TCP
+            - name: health
+              containerPort: 8081
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            limits:
+              cpu: 500m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nlag-operator-metrics
+  namespace: nlag-system
+  labels:
+    app.kubernetes.io/name: nlag
+    app.kubernetes.io/component: operator
+spec:
+  ports:
+    - name: metrics
+      port: 8080
+      protocol: TCP
+      targetPort: metrics
+  selector:
+    app.kubernetes.io/name: nlag
+    app.kubernetes.io/component: operator

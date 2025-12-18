@@ -1,0 +1,140 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tunnelconfigs.nlag.dev
+  labels:
+    app.kubernetes.io/name: nlag
+    app.kubernetes.io/component: operator
+spec:
+  group: nlag.dev
+  scope: Namespaced
+  names:
+    kind: TunnelConfig
+    plural: tunnelconfigs
+    singular: tunnelconfig
+    shortNames:
+      - tcfg
+    categories:
+      - nlag
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            spec:
+              type: object
+              description: Default configuration applied to all tunnels in this namespace
+              properties:
+                edgeServer:
+                  type: string
+                  description: Default edge server for tunnels
+                  default: edge.nlag.dev:4443
+                credentialsSecretRef:
+                  type: object
+                  description: Reference to secret containing NLAG credentials
+                  required:
+                    - name
+                  properties:
+                    name:
+                      type: string
+                      description: Name of the secret
+                    tokenKey:
+                      type: string
+                      description: Key containing the auth token
+                      default: token
+                defaultProtocol:
+                  type: string
+                  description: Default protocol for tunnels
+                  enum:
+                    - http
+                    - https
+                    - tcp
+                    - udp
+                    - grpc
+                  default: http
+                defaultHeaders:
+                  type: object
+                  description: Default headers to add to all requests
+                  additionalProperties:
+                    type: string
+                defaultIpPolicy:
+                  type: object
+                  description: Default IP policy for tunnels
+                  properties:
+                    allow:
+                      type: array
+                      items:
+                        type: string
+                    deny:
+                      type: array
+                      items:
+                        type: string
+                defaultRateLimit:
+                  type: object
+                  description: Default rate limit for tunnels
+                  properties:
+                    requestsPerSecond:
+                      type: integer
+                      minimum: 1
+                    burstSize:
+                      type: integer
+                      minimum: 1
+                defaultCircuitBreaker:
+                  type: object
+                  description: Default circuit breaker settings
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
+                    failureThreshold:
+                      type: integer
+                      default: 5
+                    recoveryTimeout:
+                      type: string
+                      default: "30s"
+                tls:
+                  type: object
+                  description: TLS configuration
+                  properties:
+                    insecure:
+                      type: boolean
+                      description: Skip TLS verification (development only)
+                      default: false
+                    caSecretRef:
+                      type: object
+                      description: Reference to secret containing CA certificate
+                      properties:
+                        name:
+                          type: string
+                        key:
+                          type: string
+                          default: ca.crt
+            status:
+              type: object
+              properties:
+                appliedTunnels:
+                  type: integer
+                  description: Number of tunnels using this config
+                lastUpdated:
+                  type: string
+                  format: date-time
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Edge Server
+          type: string
+          jsonPath: .spec.edgeServer
+        - name: Protocol
+          type: string
+          jsonPath: .spec.defaultProtocol
+        - name: Tunnels
+          type: integer
+          jsonPath: .status.appliedTunnels
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

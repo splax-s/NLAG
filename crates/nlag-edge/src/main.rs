@@ -36,12 +36,14 @@ mod region;
 mod registry;
 mod replay;
 mod server;
+mod ssh_tunnel;
 mod transform;
 mod udp;
 mod url_rewrite;
 mod warning;
 mod webhooks;
 mod wildcard;
+mod geo;
 
 use cli::Cli;
 

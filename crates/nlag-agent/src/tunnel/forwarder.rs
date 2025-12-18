@@ -22,6 +22,7 @@ use nlag_common::{
 };
 
 use crate::ui::{UiHandle, HttpRequest};
+use super::DashboardSync;
 
 /// Statistics for forwarding
 #[derive(Debug, Default)]
@@ -37,9 +38,11 @@ pub async fn forward_loop(
     connection: QuicConnection,
     tunnel_id: TunnelId,
     local_addr: &str,
+    dashboard_sync: Option<DashboardSync>,
 ) -> anyhow::Result<()> {
     let stats = Arc::new(ForwardStats::default());
     let local_addr = local_addr.to_string();
+    let dashboard_sync = dashboard_sync.map(Arc::new);
 
     info!("Starting forwarding loop for tunnel {}", tunnel_id);
 
@@ -59,10 +62,11 @@ pub async fn forward_loop(
 
         let local_addr = local_addr.clone();
         let stats = stats.clone();
+        let dashboard_sync = dashboard_sync.clone();
 
         // Spawn task to handle this stream
         tokio::spawn(async move {
-            if let Err(e) = handle_stream(send, recv, tunnel_id, &local_addr, stats).await {
+            if let Err(e) = handle_stream_with_dashboard(send, recv, tunnel_id, &local_addr, stats, dashboard_sync).await {
                 debug!("Stream handling error: {}", e);
             }
         });
@@ -603,6 +607,155 @@ async fn handle_stream(
 
     // Run both directions concurrently
     tokio::join!(edge_to_local, local_to_edge);
+
+    stats.streams_closed.fetch_add(1, Ordering::Relaxed);
+    debug!("Stream {} closed", stream_id);
+
+    Ok(())
+}
+
+/// Handle a single stream with dashboard sync - forward traffic and sync stats
+async fn handle_stream_with_dashboard(
+    mut quic_send: quinn::SendStream,
+    mut quic_recv: quinn::RecvStream,
+    tunnel_id: TunnelId,
+    local_addr: &str,
+    stats: Arc<ForwardStats>,
+    dashboard_sync: Option<Arc<DashboardSync>>,
+) -> anyhow::Result<()> {
+    let start_time = Instant::now();
+    
+    // Read the stream open message to get stream info
+    let msg = read_message(&mut quic_recv).await?;
+
+    let (stream_id, metadata) = match msg {
+        Message::StreamOpen(open) => {
+            debug!(
+                "Stream {} opened from {}",
+                open.stream_id, open.source_addr
+            );
+            stats.streams_opened.fetch_add(1, Ordering::Relaxed);
+            (open.stream_id, open.metadata)
+        }
+        other => {
+            warn!("Expected StreamOpen, got {:?}", other.message_type());
+            return Err(anyhow::anyhow!("Unexpected message type"));
+        }
+    };
+
+    // Connect to local service
+    let mut local = match TcpStream::connect(local_addr).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            error!("Failed to connect to local service at {}: {}", local_addr, e);
+
+            // Sync error to dashboard
+            if let Some(sync) = dashboard_sync {
+                let duration = start_time.elapsed().as_millis() as u64;
+                sync.sync_request(metadata.clone(), 502, duration).await;
+            }
+
+            let close = Message::StreamClose(StreamCloseMessage {
+                stream_id,
+                graceful: false,
+                error: Some(format!("Local service unavailable: {}", e)),
+            });
+            let _ = write_message(&mut quic_send, &close).await;
+
+            stats.streams_closed.fetch_add(1, Ordering::Relaxed);
+            return Err(anyhow::anyhow!("Local connection failed"));
+        }
+    };
+
+    debug!("Connected to local service at {}", local_addr);
+
+    let (mut local_read, mut local_write) = local.split();
+
+    let stats_clone = stats.clone();
+    let mut captured_status = 200u16;
+
+    // Forward: edge -> local
+    let edge_to_local = async {
+        let mut total_bytes = 0u64;
+
+        loop {
+            let msg = match read_message(&mut quic_recv).await {
+                Ok(msg) => msg,
+                Err(_) => break,
+            };
+
+            match msg {
+                Message::Data(frame) => {
+                    if frame.stream_id != stream_id {
+                        continue;
+                    }
+                    if local_write.write_all(&frame.payload).await.is_err() {
+                        break;
+                    }
+                    total_bytes += frame.payload.len() as u64;
+                }
+                Message::StreamClose(_) => break,
+                _ => {}
+            }
+        }
+
+        stats_clone.bytes_in.fetch_add(total_bytes, Ordering::Relaxed);
+        let _ = local_write.shutdown().await;
+    };
+
+    // Forward: local -> edge
+    let local_to_edge = async {
+        let mut buf = vec![0u8; 64 * 1024];
+        let mut total_bytes = 0u64;
+        let mut first_read = true;
+
+        loop {
+            let n = match local_read.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(_) => break,
+            };
+
+            // Try to extract HTTP status from first response chunk
+            if first_read {
+                first_read = false;
+                if let Some(status) = extract_http_status(&buf[..n]) {
+                    captured_status = status;
+                }
+            }
+
+            let frame = Message::Data(DataFrame {
+                tunnel_id,
+                stream_id,
+                payload: buf[..n].to_vec(),
+            });
+
+            if write_message(&mut quic_send, &frame).await.is_err() {
+                break;
+            }
+
+            total_bytes += n as u64;
+        }
+
+        stats.bytes_out.fetch_add(total_bytes, Ordering::Relaxed);
+
+        let close = Message::StreamClose(StreamCloseMessage {
+            stream_id,
+            graceful: true,
+            error: None,
+        });
+        let _ = write_message(&mut quic_send, &close).await;
+        
+        captured_status
+    };
+
+    let (_, status) = tokio::join!(edge_to_local, local_to_edge);
+
+    // Sync to dashboard
+    if let Some(sync) = dashboard_sync {
+        let duration = start_time.elapsed().as_millis() as u64;
+        sync.sync_request(metadata, status, duration).await;
+    }
 
     stats.streams_closed.fetch_add(1, Ordering::Relaxed);
     debug!("Stream {} closed", stream_id);

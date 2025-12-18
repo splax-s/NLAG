@@ -25,6 +25,7 @@ rustls = { workspace = true }
 
 # CLI
 clap = { workspace = true }
+clap_complete = "4.5"
 
 # Configuration
 config = { workspace = true }
@@ -62,5 +63,9 @@ url = "2"
 # Inspect UI
 axum = { workspace = true, features = ["ws"] }
 
+# File server
+urlencoding = "2.1"
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }
+tempfile = "3"

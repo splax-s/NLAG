@@ -1,0 +1,50 @@
+[package]
+name = "nlag-sdk"
+version = "0.1.0"
+edition = "2021"
+description = "Rust SDK for NLAG - Expose local services through secure tunnels"
+license = "Apache-2.0"
+repository = "https://github.com/splax-s/nlag"
+documentation = "https://docs.rs/nlag-sdk"
+readme = "README.md"
+keywords = ["tunnel", "ngrok", "networking", "proxy", "development"]
+categories = ["network-programming", "development-tools"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros", "fs"] }
+futures = "0.3"
+
+# Networking
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Utilities
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+dashmap = "6"
+tracing = "0.1"
+url = "2"
+
+# HTTP client for control plane API
+reqwest = { version = "0.12", features = ["json"], optional = true }
+
+# File system for credentials
+dirs = "5"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["test-util", "macros"] }
+tempfile = "3"
+
+[features]
+default = ["control-api"]
+control-api = ["reqwest"]

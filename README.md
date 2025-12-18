@@ -29,6 +29,26 @@ A production-grade secure tunneling platform built in Rust, providing:
 - **Connection Pooling**: Efficient connection reuse
 - **Custom Domains**: CNAME/TXT verification for custom domain mapping
 - **Graceful Shutdown**: Proper connection draining
+- **Basic Auth**: Per-tunnel authentication with bcrypt passwords and path exclusions
+- **Circuit Breaker**: Automatic failure detection with configurable thresholds
+- **IP Restrictions**: Allow/deny lists with CIDR support
+
+### ✅ Request Processing
+
+- **URL Rewriting**: Regex-based path rewriting, redirects, and proxying
+- **Header Transformation**: Add, remove, or modify request/response headers
+- **Wildcard Domains**: Pattern matching for `*.example.com` routing
+- **Custom Error Pages**: Templated HTML/JSON/plain text error responses
+- **Event Webhooks**: Tunnel lifecycle events sent to external services
+- **Middleware Pipeline**: Unified request/response processing orchestration
+- **Webhook Verification**: Validate signatures from Stripe, GitHub, Slack, Discord, etc.
+
+### ✅ Security & Authentication
+
+- **ACME/Let's Encrypt**: Automatic TLS certificate provisioning with HTTP-01 challenges
+- **OAuth/OIDC**: Google, GitHub, Microsoft/Azure AD, and generic OIDC providers
+- **Traffic Policies**: YAML/JSON configurable rules for routing, auth, transformations
+- **JWT Authentication**: Secure agent authentication with RS256/HS256
 
 ### ✅ Observability
 
@@ -165,11 +185,88 @@ Options:
   --request-details         Show detailed request cards
   --health                  Show connection health indicator
 
+# Start tunnels from config file
+nlag start --config nlag.yaml
+
+# Start specific group or tunnel
+nlag start --config nlag.yaml --group production
+nlag start --config nlag.yaml --tunnel web-api
+
+# Config file management
+nlag config validate --config nlag.yaml
+nlag config example --format yaml
+nlag config init --format toml
+
 # Show configuration
 nlag config --show
 
 # Show version
 nlag version
+
+# Generate shell completions
+nlag completions bash > /etc/bash_completion.d/nlag
+nlag completions zsh > ~/.zsh/completions/_nlag
+nlag completions fish > ~/.config/fish/completions/nlag.fish
+```
+
+### Shell Completions
+
+Generate shell completions for your favorite shell:
+
+```bash
+# Bash
+nlag completions bash > /etc/bash_completion.d/nlag
+# Or for user-local installation:
+nlag completions bash > ~/.bash_completion.d/nlag
+
+# Zsh
+nlag completions zsh > ~/.zsh/completions/_nlag
+# Add to your ~/.zshrc: fpath=(~/.zsh/completions $fpath)
+
+# Fish
+nlag completions fish > ~/.config/fish/completions/nlag.fish
+
+# PowerShell
+nlag completions power-shell > $PROFILE.CurrentUserAllHosts
+
+# Elvish
+nlag completions elvish > ~/.elvish/lib/nlag.elv
+```
+
+### Agent Config File
+
+Create `nlag.yaml` to manage multiple tunnels:
+
+```yaml
+version: "1"
+edge_url: "localhost:4443"
+insecure: true  # Skip TLS verification (dev only)
+
+tunnels:
+  web-api:
+    proto: http
+    local_addr: "127.0.0.1:3000"
+    subdomain: api
+    group: backend
+    basic_auth:
+      - username: admin
+        password: secret123
+    ip_allow:
+      - "10.0.0.0/8"
+    ip_deny:
+      - "192.168.1.100"
+
+  grpc-service:
+    proto: grpc
+    local_addr: "127.0.0.1:50051"
+    subdomain: grpc
+    group: backend
+
+groups:
+  backend:
+    description: "Backend services"
+  frontend:
+    description: "Frontend apps"
 ```
 
 ### Examples
@@ -198,6 +295,21 @@ nlag expose grpc 50051 --subdomain api
 
 # Expose UDP (e.g., DNS or game server)
 nlag expose udp 27015 --subdomain gameserver
+
+# Start all tunnels from config
+nlag start --config nlag.yaml
+
+# Start only specific group
+nlag start --config nlag.yaml --group backend
+
+# Start with file watching (restart on config change)
+nlag start --config nlag.yaml --watch
+
+# Generate example config
+nlag config example --format yaml > nlag.yaml
+
+# Validate config before starting
+nlag config validate --config nlag.yaml
 ```
 
 ## Configuration
@@ -348,56 +460,45 @@ NLAG uses a binary framed protocol over QUIC streams:
 
 ## Planned Features
 
-### High Priority
+### ✅ Recently Implemented
 
-- [ ] **ACME/Let's Encrypt** - Automatic TLS certificate provisioning
-- [ ] **Traffic Policy Engine** - YAML/JSON rules for routing, auth, transformations
-- [ ] **OAuth/OIDC Integration** - Google, GitHub, Azure AD authentication
-- [ ] **IP Allowlist/Blocklist** - Restrict access by IP/CIDR
-- [ ] **Webhook Verification** - Validate webhooks from Stripe, GitHub, Slack, etc.
+- [x] **ACME/Let's Encrypt** - Automatic TLS certificate provisioning with HTTP-01 challenges
+- [x] **Traffic Policy Engine** - YAML/JSON rules for routing, auth, rate limiting, transformations
+- [x] **OAuth/OIDC Integration** - Google, GitHub, Azure AD, and generic OIDC authentication
+- [x] **Webhook Verification** - Validate webhooks from Stripe, GitHub, Slack, Shopify, Discord, Twilio
+- [x] **Request/Response Transformation** - Add/remove/modify headers dynamically
+- [x] **URL Rewriting** - Path-based routing, rewrites, and redirects with regex support
+- [x] **Basic Auth** - Username/password protection with bcrypt, per-path rules
+- [x] **Circuit Breaker** - Automatic failure detection with half-open recovery
+- [x] **Wildcard Domains** - Route `*.example.com` to tunnels with pattern matching
+- [x] **Custom Error Pages** - Branded HTML/JSON/plain error responses with templates
+- [x] **Event Webhooks** - Send tunnel events to external services (start, stop, request, error)
+- [x] **Agent Config File** - Start multiple tunnels from YAML/TOML config
+- [x] **IP Allowlist/Blocklist** - Restrict access by IP/CIDR ranges
+- [x] **Middleware Pipeline** - Unified request/response processing orchestration
+- [x] **Endpoint Pooling / Load Balancing** - Multiple agents with round-robin, least-connections, weighted, IP hash strategies
+- [x] **File Server Mode** - Serve static files directly with MIME detection, range requests, ETags, directory listing
+- [x] **Traffic Policy Actions** - Compress (gzip/brotli) and cache responses via policy rules
+- [x] **Reserved Domains** - Persistent subdomains with custom domain verification and wildcard support
+- [x] **Request Replay from UI** - One-click replay in inspect interface with full request/response capture
+- [x] **SSH Reverse Tunnel** - Create tunnels via SSH with public key auth, session management, subdomain allocation
 
-### Medium Priority
+### ✅ Enterprise Features
 
-- [ ] **Request/Response Transformation** - Add/remove/modify headers
-- [ ] **URL Rewriting** - Path-based routing and rewrites
-- [ ] **Basic Auth** - Simple username/password protection
-- [ ] **Endpoint Pooling** - Multiple agents serving same subdomain with failover
-- [ ] **File Server Mode** - Serve static files directly (`nlag expose file:///path`)
-- [ ] **Circuit Breaker** - Automatic failure detection and recovery
+- [x] **SSO Integration** - SAML 2.0 support with Okta, Azure AD, OneLogin, Google Workspace
+- [x] **Audit Log Export** - Ship to SIEM (Splunk HEC, Datadog, Elasticsearch, CloudWatch, webhooks)
+- [x] **Usage Analytics Dashboard** - Traffic insights, bandwidth tracking, latency percentiles, top endpoints
+- [x] **Team Management** - Role-based access control with Owner/Admin/Developer/Viewer roles, custom roles, invitations
+- [x] **SLA Monitoring** - Uptime tracking, latency percentiles, error rates, tier-based targets, alerting
+- [x] **Geo-Restriction** - Block/allow by country/region, ASN blocking, VPN/Tor/proxy detection
 
-### ngrok-Inspired Features
+### ✅ Developer Experience
 
-- [ ] **Reserved Domains** - Persistent subdomains across sessions
-- [ ] **Wildcard Domains** - Route `*.example.com` to tunnels
-- [ ] **Custom Error Pages** - Branded error responses
-- [ ] **Request Replay from UI** - One-click replay in inspect interface
-- [ ] **Event Webhooks** - Send tunnel events to external services
-- [ ] **SSH Reverse Tunnel** - Create tunnels via SSH
-- [ ] **Agent Config File** - Start multiple tunnels from YAML config
-- [ ] **Traffic Policy Actions**:
-  - `rate-limit` - Per-path rate limiting
-  - `redirect` - URL redirects
-  - `custom-response` - Return static responses
-  - `compress` - Gzip/Brotli compression
-  - `cache` - Response caching
-  - `timeout` - Custom timeouts per route
-
-### Enterprise Features
-
-- [ ] **SSO Integration** - SAML 2.0 support
-- [ ] **Audit Log Export** - Ship to SIEM (Splunk, Datadog, etc.)
-- [ ] **Usage Analytics Dashboard** - Traffic insights and trends
-- [ ] **Team Management** - Role-based access control
-- [ ] **SLA Monitoring** - Uptime and latency tracking
-- [ ] **Geo-Restriction** - Block/allow by country
-
-### Developer Experience
-
-- [ ] **Agent SDKs** - Rust, Go, Python, Node.js libraries
-- [ ] **Kubernetes Operator** - Native K8s CRD integration
-- [ ] **VS Code Extension** - Start tunnels from IDE
-- [ ] **Terraform Provider** - Infrastructure as code support
-- [ ] **CLI Completions** - Shell autocomplete for bash/zsh/fish
+- [x] **Agent SDKs** - Python, Node.js/TypeScript, Rust, and Go SDKs with full async support
+- [x] **Kubernetes Operator** - Native K8s CRD integration with Tunnel and TunnelConfig resources
+- [x] **VS Code Extension** - Start tunnels from IDE with sidebar, status bar, and auto-expose on debug
+- [x] **Terraform Provider** - Infrastructure as code support with tunnel, domain, and API key resources
+- [x] **CLI Completions** - Shell autocomplete for bash/zsh/fish/PowerShell/elvish
 
 ## Development
 
