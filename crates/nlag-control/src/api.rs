@@ -25,6 +25,7 @@ use crate::apikeys::{ApiKeyManager, CreateApiKeyRequest as ApiKeyCreateRequest, 
 use crate::auth::AuthService;
 use crate::billing::{BillingManager, SubscriptionTier};
 use crate::store::Store;
+use crate::traffic::{TrafficRecord, TrafficStore, TrafficQuery};
 
 /// API state shared across handlers
 pub struct ApiState {
@@ -32,6 +33,7 @@ pub struct ApiState {
     pub store: Arc<Store>,
     pub api_keys: Arc<ApiKeyManager>,
     pub billing: Arc<BillingManager>,
+    pub traffic_store: Arc<dyn TrafficStore>,
 }
 
 /// Authenticated user extracted from JWT token
@@ -105,6 +107,7 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         // Authenticated endpoints
         .route("/api/v1/tunnels", get(list_tunnels))
         .route("/api/v1/tunnels", post(create_tunnel))
+        .route("/api/v1/tunnels/count", get(get_tunnel_count))
         .route("/api/v1/tunnels/:id", get(get_tunnel))
         .route("/api/v1/tunnels/:id", delete(delete_tunnel))
         .route("/api/v1/agents", get(list_agents))
@@ -112,6 +115,11 @@ pub fn create_router(state: Arc<ApiState>) -> Router {
         .route("/api/v1/tokens", get(list_tokens))
         .route("/api/v1/tokens", post(create_token))
         .route("/api/v1/tokens/:id", delete(revoke_token))
+        // Traffic sync endpoint (from agent)
+        .route("/api/v1/traffic/sync", post(sync_traffic))
+        // Traffic query endpoints (for dashboard)
+        .route("/api/v1/traffic", get(query_traffic))
+        .route("/api/v1/traffic/metrics", get(get_traffic_metrics))
         // API Key management endpoints
         .route("/api/v1/apikeys", get(list_api_keys))
         .route("/api/v1/apikeys", post(create_api_key))
@@ -154,12 +162,30 @@ pub struct LoginResponse {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_in: u64,
+    pub expires_at: u64,
     pub token_type: String,
+    pub user: UserInfoResponse,
+}
+
+#[derive(Debug, Serialize)]
+pub struct UserInfoResponse {
+    pub email: String,
+    pub tier: String,
+    pub max_tunnels: u32,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct RefreshRequest {
     pub refresh_token: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RefreshTokenResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: u64,
+    pub expires_at: u64,
+    pub token_type: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -293,18 +319,36 @@ async fn login(
             code: "internal_error".to_string(),
         })?;
 
+    // Get user subscription tier
+    let subscription = state.billing.get_or_create_subscription(&user.id);
+    let limits = subscription.tier.limits();
+    let tier_name = format!("{:?}", subscription.tier).to_lowercase();
+
+    // Calculate expires_at
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let expires_at = now + expires_in;
+
     Ok(Json(LoginResponse {
         access_token,
         refresh_token,
         expires_in,
+        expires_at,
         token_type: "Bearer".to_string(),
+        user: UserInfoResponse {
+            email: user.email.clone(),
+            tier: tier_name,
+            max_tunnels: limits.max_tunnels,
+        },
     }))
 }
 
 async fn refresh_token(
     State(state): State<Arc<ApiState>>,
     Json(req): Json<RefreshRequest>,
-) -> Result<Json<LoginResponse>, ApiError> {
+) -> Result<Json<RefreshTokenResponse>, ApiError> {
     let (access_token, refresh_token, expires_in) = state.auth.refresh_tokens(&req.refresh_token)
         .map_err(|e| ApiError {
             error: "refresh_failed".to_string(),
@@ -312,10 +356,18 @@ async fn refresh_token(
             code: "unauthorized".to_string(),
         })?;
 
-    Ok(Json(LoginResponse {
+    // Calculate expires_at
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let expires_at = now + expires_in;
+
+    Ok(Json(RefreshTokenResponse {
         access_token,
         refresh_token,
         expires_in,
+        expires_at,
         token_type: "Bearer".to_string(),
     }))
 }
@@ -340,6 +392,30 @@ async fn create_tunnel(
     user: AuthenticatedUser,
     Json(req): Json<CreateTunnelRequest>,
 ) -> Result<Json<TunnelResponse>, ApiError> {
+    // Check tunnel limit for this user
+    let subscription = state.billing.get_or_create_subscription(&user.user_id);
+    let limits = subscription.tier.limits();
+    
+    let current_tunnels = state.store.list_tunnels(&user.user_id)
+        .await
+        .map_err(|e| ApiError {
+            error: "check_failed".to_string(),
+            message: e.to_string(),
+            code: "internal_error".to_string(),
+        })?;
+    
+    if current_tunnels.len() >= limits.max_tunnels as usize {
+        return Err(ApiError {
+            error: "tunnel_limit_exceeded".to_string(),
+            message: format!(
+                "Tunnel limit reached. Your {} plan allows {} tunnel(s). Upgrade to create more.",
+                format!("{:?}", subscription.tier),
+                limits.max_tunnels
+            ),
+            code: "forbidden".to_string(),
+        });
+    }
+
     let tunnel = state.store.create_tunnel(
         &user.user_id,
         &req.name,
@@ -705,4 +781,287 @@ async fn billing_webhook(
         })?;
 
     Ok(StatusCode::OK)
+}
+
+// === Tunnel Count Endpoint ===
+
+#[derive(Debug, Serialize)]
+pub struct TunnelCountResponse {
+    pub count: u32,
+}
+
+async fn get_tunnel_count(
+    State(state): State<Arc<ApiState>>,
+    user: AuthenticatedUser,
+) -> Result<Json<TunnelCountResponse>, ApiError> {
+    let tunnels = state.store.list_tunnels(&user.user_id)
+        .await
+        .map_err(|e| ApiError {
+            error: "count_failed".to_string(),
+            message: e.to_string(),
+            code: "internal_error".to_string(),
+        })?;
+
+    Ok(Json(TunnelCountResponse {
+        count: tunnels.len() as u32,
+    }))
+}
+
+// === Traffic Sync Endpoint ===
+
+/// Captured traffic request from agent
+#[derive(Debug, Deserialize)]
+pub struct TrafficSyncRequest {
+    pub id: String,
+    pub tunnel_id: String,
+    pub timestamp: String,
+    pub method: String,
+    pub path: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Option<String>,
+    pub content_type: Option<String>,
+    pub content_length: Option<usize>,
+    pub response_status: Option<u16>,
+    pub response_headers: Option<Vec<(String, String)>>,
+    pub response_body: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub client_addr: Option<String>,
+}
+
+async fn sync_traffic(
+    State(state): State<Arc<ApiState>>,
+    user: AuthenticatedUser,
+    Json(req): Json<TrafficSyncRequest>,
+) -> Result<StatusCode, ApiError> {
+    // Verify the tunnel belongs to this user
+    let _tunnel = state.store.get_tunnel(&req.tunnel_id)
+        .await
+        .map_err(|_| ApiError {
+            error: "tunnel_not_found".to_string(),
+            message: "Tunnel not found".to_string(),
+            code: "not_found".to_string(),
+        })?;
+
+    // Parse timestamp
+    let timestamp = chrono::DateTime::parse_from_rfc3339(&req.timestamp)
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|_| chrono::Utc::now());
+
+    // Create traffic record for storage
+    let record = TrafficRecord {
+        id: req.id,
+        user_id: user.user_id.clone(),
+        tunnel_id: req.tunnel_id.clone(),
+        timestamp,
+        method: req.method.clone(),
+        path: req.path.clone(),
+        headers: req.headers,
+        body: req.body,
+        content_type: req.content_type,
+        content_length: req.content_length.map(|v| v as i64),
+        response_status: req.response_status.map(|v| v as i16),
+        response_headers: req.response_headers,
+        response_body: req.response_body,
+        duration_ms: req.duration_ms.map(|v| v as i64),
+        client_addr: req.client_addr,
+    };
+
+    // Store in persistent storage
+    state.traffic_store.insert(record).await
+        .map_err(|e| ApiError {
+            error: "storage_error".to_string(),
+            message: format!("Failed to store traffic: {}", e),
+            code: "internal_error".to_string(),
+        })?;
+
+    tracing::debug!(
+        user_id = %user.user_id,
+        tunnel_id = %req.tunnel_id,
+        method = %req.method,
+        path = %req.path,
+        status = ?req.response_status,
+        "Traffic synced and stored"
+    );
+
+    Ok(StatusCode::ACCEPTED)
+}
+
+// === Traffic Query Endpoints ===
+
+#[derive(Debug, Deserialize)]
+pub struct TrafficQueryParams {
+    /// Filter by tunnel ID
+    tunnel_id: Option<String>,
+    /// Filter by HTTP method
+    method: Option<String>,
+    /// Filter by path prefix
+    path_prefix: Option<String>,
+    /// Filter by minimum status code
+    status_min: Option<i16>,
+    /// Filter by maximum status code
+    status_max: Option<i16>,
+    /// Start time (RFC3339 format)
+    start_time: Option<String>,
+    /// End time (RFC3339 format)
+    end_time: Option<String>,
+    /// Maximum number of results (default: 100)
+    limit: Option<i64>,
+    /// Offset for pagination
+    offset: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TrafficQueryResponse {
+    pub records: Vec<TrafficRecordResponse>,
+    pub total: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TrafficRecordResponse {
+    pub id: String,
+    pub tunnel_id: String,
+    pub timestamp: String,
+    pub method: String,
+    pub path: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Option<String>,
+    pub content_type: Option<String>,
+    pub content_length: Option<i64>,
+    pub response_status: Option<i16>,
+    pub response_headers: Option<Vec<(String, String)>>,
+    pub response_body: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub client_addr: Option<String>,
+}
+
+async fn query_traffic(
+    State(state): State<Arc<ApiState>>,
+    user: AuthenticatedUser,
+    axum::extract::Query(params): axum::extract::Query<TrafficQueryParams>,
+) -> Result<Json<TrafficQueryResponse>, ApiError> {
+    let start_time = params.start_time
+        .as_ref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+    
+    let end_time = params.end_time
+        .as_ref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    let query = TrafficQuery {
+        user_id: Some(user.user_id),
+        tunnel_id: params.tunnel_id,
+        method: params.method,
+        path_prefix: params.path_prefix,
+        status_min: params.status_min,
+        status_max: params.status_max,
+        start_time,
+        end_time,
+        limit: params.limit.or(Some(100)),
+        offset: params.offset,
+    };
+
+    let records = state.traffic_store.query(query).await
+        .map_err(|e| ApiError {
+            error: "query_failed".to_string(),
+            message: format!("Failed to query traffic: {}", e),
+            code: "internal_error".to_string(),
+        })?;
+
+    let response_records: Vec<TrafficRecordResponse> = records.iter()
+        .map(|r| TrafficRecordResponse {
+            id: r.id.clone(),
+            tunnel_id: r.tunnel_id.clone(),
+            timestamp: r.timestamp.to_rfc3339(),
+            method: r.method.clone(),
+            path: r.path.clone(),
+            headers: r.headers.clone(),
+            body: r.body.clone(),
+            content_type: r.content_type.clone(),
+            content_length: r.content_length,
+            response_status: r.response_status,
+            response_headers: r.response_headers.clone(),
+            response_body: r.response_body.clone(),
+            duration_ms: r.duration_ms,
+            client_addr: r.client_addr.clone(),
+        })
+        .collect();
+
+    let total = response_records.len();
+
+    Ok(Json(TrafficQueryResponse {
+        records: response_records,
+        total,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TrafficMetricsParams {
+    /// Filter by tunnel ID
+    tunnel_id: Option<String>,
+    /// Start time (RFC3339 format)
+    start_time: Option<String>,
+    /// End time (RFC3339 format)
+    end_time: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TrafficMetricsResponse {
+    pub total_requests: i64,
+    pub requests_2xx: i64,
+    pub requests_3xx: i64,
+    pub requests_4xx: i64,
+    pub requests_5xx: i64,
+    pub avg_duration_ms: f64,
+    pub p50_duration_ms: f64,
+    pub p95_duration_ms: f64,
+    pub p99_duration_ms: f64,
+    pub total_bytes: i64,
+    pub unique_clients: i64,
+}
+
+async fn get_traffic_metrics(
+    State(state): State<Arc<ApiState>>,
+    user: AuthenticatedUser,
+    axum::extract::Query(params): axum::extract::Query<TrafficMetricsParams>,
+) -> Result<Json<TrafficMetricsResponse>, ApiError> {
+    let start_time = params.start_time
+        .as_ref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+    
+    let end_time = params.end_time
+        .as_ref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+
+    let query = TrafficQuery {
+        user_id: Some(user.user_id),
+        tunnel_id: params.tunnel_id,
+        start_time,
+        end_time,
+        ..Default::default()
+    };
+
+    let metrics = state.traffic_store.get_metrics(query).await
+        .map_err(|e| ApiError {
+            error: "metrics_failed".to_string(),
+            message: format!("Failed to get metrics: {}", e),
+            code: "internal_error".to_string(),
+        })?;
+
+    Ok(Json(TrafficMetricsResponse {
+        total_requests: metrics.total_requests,
+        requests_2xx: metrics.requests_2xx,
+        requests_3xx: metrics.requests_3xx,
+        requests_4xx: metrics.requests_4xx,
+        requests_5xx: metrics.requests_5xx,
+        avg_duration_ms: metrics.avg_duration_ms,
+        p50_duration_ms: metrics.p50_duration_ms,
+        p95_duration_ms: metrics.p95_duration_ms,
+        p99_duration_ms: metrics.p99_duration_ms,
+        total_bytes: metrics.total_bytes,
+        unique_clients: metrics.unique_clients,
+    }))
 }

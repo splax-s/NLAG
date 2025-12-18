@@ -49,5 +49,18 @@ serde_json = "1.0"
 ratatui = "0.29"
 crossterm = "0.28"
 
+# Auth
+rpassword = "7.3"
+reqwest = { version = "0.12", features = ["json"] }
+
+# Agent config file support
+serde_yaml = "0.9"
+toml = "0.8"
+regex = "1"
+url = "2"
+
+# Inspect UI
+axum = { workspace = true, features = ["ws"] }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

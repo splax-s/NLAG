@@ -25,10 +25,14 @@ mod apikeys;
 mod auth;
 mod billing;
 mod dashboard;
+mod domains;
+mod oauth;
 mod store;
+mod traffic;
 
 use apikeys::ApiKeyManager;
 use billing::BillingManager;
+use traffic::MemoryTrafficStore;
 
 /// NLAG Control Plane
 #[derive(Parser, Debug)]
@@ -92,11 +96,48 @@ async fn main() -> anyhow::Result<()> {
     let billing_manager = BillingManager::new(webhook_secret);
     tracing::info!("Billing manager initialized");
 
+    // Initialize traffic store
+    // Use in-memory store by default, PostgreSQL when 'postgres' feature is enabled
+    let traffic_store: std::sync::Arc<dyn traffic::TrafficStore> = {
+        #[cfg(feature = "postgres")]
+        {
+            if let Ok(database_url) = std::env::var("DATABASE_URL") {
+                match traffic::postgres::PgTrafficStore::new(&database_url).await {
+                    Ok(pg_store) => {
+                        if let Err(e) = pg_store.init_schema().await {
+                            tracing::error!("Failed to initialize database schema: {}", e);
+                            tracing::warn!("Falling back to in-memory traffic store");
+                            std::sync::Arc::new(MemoryTrafficStore::new())
+                        } else {
+                            tracing::info!("PostgreSQL traffic store initialized with TimescaleDB");
+                            std::sync::Arc::new(pg_store)
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to connect to PostgreSQL: {}", e);
+                        tracing::warn!("Falling back to in-memory traffic store");
+                        std::sync::Arc::new(MemoryTrafficStore::new())
+                    }
+                }
+            } else {
+                tracing::info!("DATABASE_URL not set, using in-memory traffic store");
+                std::sync::Arc::new(MemoryTrafficStore::new())
+            }
+        }
+        
+        #[cfg(not(feature = "postgres"))]
+        {
+            tracing::info!("Using in-memory traffic store (enable 'postgres' feature for persistent storage)");
+            std::sync::Arc::new(MemoryTrafficStore::new())
+        }
+    };
+
     let api_state = std::sync::Arc::new(api::ApiState {
         auth: auth_service,
         store,
         api_keys: api_key_manager,
         billing: billing_manager,
+        traffic_store,
     });
 
     // Combine API and Dashboard routers

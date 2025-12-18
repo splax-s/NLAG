@@ -24,6 +24,34 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Commands {
+    /// Start tunnels from a configuration file
+    #[command(alias = "s")]
+    Start {
+        /// Path to configuration file (YAML or TOML)
+        #[arg(short, long)]
+        config: Option<String>,
+
+        /// Only start tunnels in this group
+        #[arg(short, long)]
+        group: Option<String>,
+
+        /// Only start specific tunnel by name
+        #[arg(short, long)]
+        tunnel: Option<String>,
+
+        /// Edge server address (overrides config)
+        #[arg(short, long)]
+        edge: Option<String>,
+
+        /// Skip TLS verification (DANGEROUS - dev only)
+        #[arg(short = 'k', long)]
+        insecure: bool,
+
+        /// Watch config file for changes and reload
+        #[arg(short, long)]
+        watch: bool,
+    },
+
     /// Expose a local service through a secure tunnel
     #[command(alias = "e")]
     Expose {
@@ -95,6 +123,39 @@ pub enum Commands {
         action: ConfigAction,
     },
 
+    /// Authenticate with the NLAG control plane
+    #[command(alias = "auth")]
+    Login {
+        /// Email address for authentication
+        #[arg(short, long)]
+        email: Option<String>,
+
+        /// Control plane server address
+        #[arg(short, long, default_value = "https://api.nlag.dev")]
+        server: String,
+    },
+
+    /// Log out and clear stored credentials
+    Logout,
+
+    /// Show current authenticated user
+    Whoami,
+
+    /// Show the local request inspector
+    #[command(alias = "i")]
+    Inspect {
+        /// Port for the inspector web interface
+        #[arg(short, long, default_value = "4040")]
+        port: u16,
+
+        /// Bind address for the inspector
+        #[arg(short, long, default_value = "127.0.0.1")]
+        bind: String,
+    },
+
+    /// Show tunnel status and usage
+    Status,
+
     /// Show version information
     Version,
 }
@@ -109,6 +170,24 @@ pub enum ConfigAction {
         /// Force overwrite existing config
         #[arg(short, long)]
         force: bool,
+        
+        /// Format of the config file (yaml or toml)
+        #[arg(long, default_value = "yaml")]
+        format: String,
+    },
+    
+    /// Validate a configuration file
+    Validate {
+        /// Path to configuration file
+        #[arg(short, long)]
+        config: Option<String>,
+    },
+    
+    /// Generate an example configuration file
+    Example {
+        /// Output format (yaml or toml)
+        #[arg(long, default_value = "yaml")]
+        format: String,
     },
     
     /// Show the configuration file path

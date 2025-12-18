@@ -74,7 +74,7 @@ impl SubscriptionTier {
                 priority_support: false,
             },
             Self::Pro => TierLimits {
-                max_tunnels: 5,
+                max_tunnels: 10,
                 max_connections_per_tunnel: 100,
                 max_bandwidth_gb_per_month: 50,
                 max_requests_per_minute: 1000,
@@ -582,7 +582,7 @@ mod tests {
         assert_eq!(free.max_tunnels, 1);
         assert!(!free.custom_domains);
         
-        assert_eq!(pro.max_tunnels, 5);
+        assert_eq!(pro.max_tunnels, 10);  // Pro tier allows 10 tunnels
         assert!(pro.custom_domains);
     }
     

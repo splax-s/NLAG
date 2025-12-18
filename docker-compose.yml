@@ -41,13 +41,37 @@ services:
       - control-data:/var/lib/nlag:delegated
     environment:
       - RUST_LOG=nlag_control=debug,nlag=debug,nlag_common=debug
+      - DATABASE_URL=postgresql://nlag:nlag_secret@timescaledb:5432/nlag
+      - JWT_SECRET=your-production-jwt-secret-change-me
     networks:
       - nlag
+    depends_on:
+      - timescaledb
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
       interval: 30s
       timeout: 3s
       retries: 3
+    restart: unless-stopped
+
+  # TimescaleDB for traffic metrics storage
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=nlag
+      - POSTGRES_PASSWORD=nlag_secret
+      - POSTGRES_DB=nlag
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data:delegated
+    networks:
+      - nlag
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nlag -d nlag"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   # Prometheus for metrics collection
@@ -93,3 +117,4 @@ volumes:
   control-data:
   prometheus-data:
   grafana-data:
+  timescaledb-data:
